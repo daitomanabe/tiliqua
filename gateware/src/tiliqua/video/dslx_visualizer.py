@@ -1,4 +1,4 @@
-# Copyright (c) 2026 Tiliqua contributors
+# Copyright (c) 2026 Daito Manabe
 #
 # SPDX-License-Identifier: CERN-OHL-S-2.0
 

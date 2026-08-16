@@ -1,4 +1,4 @@
-# Copyright (c) 2026 Tiliqua contributors
+# Copyright (c) 2026 Daito Manabe
 #
 # SPDX-License-Identifier: CERN-OHL-S-2.0
 
@@ -28,6 +28,24 @@ def test_synthesis_report_parsers_use_final_summary():
         "75.00 MHz (PASS at 12.29 MHz)",
     ])
     assert clocks == {"sync": 64.23, "audio": 75.0}
+
+
+def test_synthesis_report_parser_accepts_yowasp_yosys_column_order():
+    resources = parse_resource_report(
+        """
+        === top ===
+           Number of cells:               3111
+             LUT4                         1253
+             MULT18X18D                      2
+             TRELLIS_FF                   1107
+        """,
+        ["LUT4", "MULT18X18D", "TRELLIS_FF"],
+    )
+    assert resources == {
+        "LUT4": 1253,
+        "MULT18X18D": 2,
+        "TRELLIS_FF": 1107,
+    }
 
 
 def test_synthesis_contract_reports_resource_and_timing_regressions():

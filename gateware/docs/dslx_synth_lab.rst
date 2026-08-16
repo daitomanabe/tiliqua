@@ -26,6 +26,15 @@ DACとDVIへ出し、最後の物理層だけを測定します。
 最初に実行するコマンド
 ----------------------
 
+``pdm: command not found`` になる場合は、先にPDMをユーザー環境へ導入します。
+
+.. code-block:: bash
+
+    uv tool install pdm
+
+インストール後は新しいshellで ``pdm --version`` を確認します。CIや一時環境では
+``uvx pdm ...`` でも実行できます。
+
 ``gateware`` ディレクトリから、次の1コマンドでローカル回帰を実行します。
 
 .. code-block:: bash
@@ -251,3 +260,8 @@ captureします。これが成功したら、同じbitstreamを ``--self-test``
 * ``--self-test`` は入力ジャックを使いません。live入力の検証では必ずフラグを外します。
 * 実機開発中はSRAMロードを使います。SPI flashへの永続書き込みは、十分に検証したrelease
   bitstreamだけにします。
+* YoWASP Yosysの最終resource表は ``LUT4 1253``、一部のnative版やfixtureは
+  ``1253 LUT4`` の順で出力します。``resource LUT4 not found in synthesis report`` は
+  合成失敗ではなく古いreport parserの列順非互換です。現在のparserは両方を受理します。
+  ``top.bit`` が生成されていてもQoR判定が失敗した場合は成功扱いにせず、
+  ``build/<profile>/top.rpt`` の最後の ``=== top ===`` を確認してparserのfixtureを追加します。

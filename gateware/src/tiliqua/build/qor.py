@@ -1,4 +1,4 @@
-# Copyright (c) 2026 Tiliqua contributors
+# Copyright (c) 2026 Daito Manabe
 #
 # SPDX-License-Identifier: CERN-OHL-S-2.0
 
@@ -12,16 +12,22 @@ import re
 def parse_resource_report(
     report_text: str, resource_names: list[str]
 ) -> dict[str, int]:
-    """Extract final Yosys resource counts from a report."""
+    """Extract final Yosys resource counts from either column order."""
 
     resources = {}
     for name in resource_names:
-        matches = re.findall(
-            rf"^\s+(\d+)\s+{re.escape(name)}\s*$", report_text, re.MULTILINE
-        )
+        matches = list(re.finditer(
+            rf"^\s*(?:(\d+)\s+{re.escape(name)}|"
+            rf"{re.escape(name)}\s+(\d+))\s*$",
+            report_text,
+            re.MULTILINE,
+        ))
         if not matches:
             raise ValueError(f"resource {name} not found in synthesis report")
-        resources[name] = int(matches[-1])
+        final_match = matches[-1]
+        resources[name] = int(
+            final_match.group(1) or final_match.group(2)
+        )
     return resources
 
 
