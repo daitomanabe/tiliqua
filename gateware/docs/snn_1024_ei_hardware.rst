@@ -32,6 +32,12 @@ spike bit、spike countを8 sample比較します。表示用membraneだけは�
 ``RGB(255, 96, 32)`` なので、固定E/I配置を映像から確認できます。これは型を表示するだけで、DVI domainから神経状態を
 変更しません。1024個のdisplay stateは従来と同じ96-bit x 32 dual-clock RAMに入るため、広いCDC bundleを復活させません。
 
+DVI frame checksumが変わるだけでは、E/Iの色を取り違えていない証拠にはなりません。unit testはgrid先頭行のcell中央を
+直接sampleし、興奮性neuron 2のlevel 2を ``RGB(170, 42, 85)``、抑制性neuron 3を
+``RGB(181, 42, 32)`` と検査します。さらに同じ2 cellのspike時が白 ``RGB(255, 255, 255)`` と橙
+``RGB(255, 96, 32)`` になることを画素単位でassertします。これにより、画面全体の変化とpopulationの意味論を別々に
+回帰できます。
+
 R5 synthesisとtiming修正
 -------------------------
 
@@ -102,6 +108,6 @@ liveの+/-2 V activity差は0.780 Vです。controlではstrong leakがactivity 
 証明範囲と次の段階
 ------------------
 
-固定3:1 E/I topology、符号付き局所結合、完全並列参照との計算等価、audio/DVI simulation、R5 timing/resource、
+固定3:1 E/I topology、符号付き局所結合、完全並列参照との計算等価、pixel-level E/I色、audio/DVI simulation、R5 timing/resource、
 自己診断、bipolar drive、3 CV responseまで証明しました。重み可変化、STDP、長距離結合、発火遅延、物理DVI画面の
 カメラ検証は未実装です。次はこの安定したE/I基盤に小さな可塑性または重みtableを加え、同じclosure loopで進めます。

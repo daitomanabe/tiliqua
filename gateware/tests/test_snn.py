@@ -13,6 +13,65 @@ from tiliqua.dsp.snn import (
     ParallelLIFBank,
     SNNTestSource,
 )
+from tiliqua.video.snn_visualizer import SNNVisualizer
+
+
+class SNNVisualizerTests(unittest.TestCase):
+
+    def test_ei_cells_have_distinct_rest_and_spike_colours(self):
+        dut = SNNVisualizer(
+            neuron_count=1024,
+            membrane_level_bits=2,
+            inhibitory_stride=4,
+        )
+
+        async def bench(ctx):
+            ctx.set(dut.y, 108)
+            ctx.set(dut.activity, 0)
+            ctx.set(dut.burst, 0)
+            ctx.set(dut.frame, 0)
+
+            # Neuron 2 is excitatory. At level 2 it is blue/magenta.
+            ctx.set(dut.x, 124)
+            ctx.set(dut.spikes, 0)
+            ctx.set(dut.membrane_levels, 2 << (2 * 2))
+            await ctx.delay(1e-9)
+            self.assertEqual(ctx.get(dut.neuron_index), 2)
+            self.assertEqual(
+                (ctx.get(dut.r), ctx.get(dut.g), ctx.get(dut.b)),
+                (170, 42, 85),
+            )
+
+            # Neuron 3 is the first inhibitory source and is orange at rest.
+            ctx.set(dut.x, 132)
+            ctx.set(dut.membrane_levels, 2 << (3 * 2))
+            await ctx.delay(1e-9)
+            self.assertEqual(ctx.get(dut.neuron_index), 3)
+            self.assertEqual(
+                (ctx.get(dut.r), ctx.get(dut.g), ctx.get(dut.b)),
+                (181, 42, 32),
+            )
+
+            # Spiking preserves the population distinction: white vs orange.
+            ctx.set(dut.x, 124)
+            ctx.set(dut.spikes, 1 << 2)
+            await ctx.delay(1e-9)
+            self.assertEqual(
+                (ctx.get(dut.r), ctx.get(dut.g), ctx.get(dut.b)),
+                (255, 255, 255),
+            )
+
+            ctx.set(dut.x, 132)
+            ctx.set(dut.spikes, 1 << 3)
+            await ctx.delay(1e-9)
+            self.assertEqual(
+                (ctx.get(dut.r), ctx.get(dut.g), ctx.get(dut.b)),
+                (255, 96, 32),
+            )
+
+        sim = Simulator(dut)
+        sim.add_testbench(bench)
+        sim.run()
 
 
 class ParallelLIFBankTests(unittest.TestCase):
