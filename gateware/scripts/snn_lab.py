@@ -21,6 +21,7 @@ from tiliqua.build.qor import parse_nextpnr_utilization
 
 ROOT = Path(__file__).resolve().parents[1]
 METRICS = ROOT / "snn-av-metrics.json"
+INHIBITION_STUDY = ROOT / "build" / "snn-inhibition-study.json"
 CONTRACT = ROOT / "snn" / "snn_contract.json"
 SYNTHESIS_CONTRACT = ROOT / "snn" / "snn_synthesis_contract.json"
 SCALE_SYNTHESIS_CONTRACT = ROOT / "snn" / "snn_128_synthesis_contract.json"
@@ -504,6 +505,91 @@ def ei_ring(args: argparse.Namespace) -> None:
     ei_ring_report(args)
 
 
+def inhibition_study(args: argparse.Namespace) -> None:
+    """Sweep three constant inhibitory strengths through AV simulation."""
+
+    quick(args)
+    results = []
+    for strength in (512, 1024, 1536):
+        METRICS.unlink(missing_ok=True)
+        run([
+            sys.executable,
+            "src/top/snn_av/top.py",
+            "sim",
+            "--hw", args.hw,
+            "--modeline", args.modeline,
+            "--self-test",
+            "--neurons", "1024",
+            "--physical-lanes", "32",
+            "--ei-ring",
+            "--inhibitory-strength", str(strength),
+            "--name", f"SNN-AV-1024X32-EI-{strength}-STUDY",
+        ])
+        metrics = json.loads(METRICS.read_text())
+        results.append({
+            "inhibitory_strength": strength,
+            "neuron_samples": metrics["test_sample_index"],
+            "dvi_checksum": metrics["dvi"]["checksum"],
+            "audio_mean_abs": [entry["mean_abs"] for entry in metrics["audio"]],
+            "audio_ranges": [
+                {"min": entry["min"], "max": entry["max"]}
+                for entry in metrics["audio"]
+            ],
+        })
+    checksums = {item["dvi_checksum"] for item in results}
+    channel_spreads = []
+    for channel in range(4):
+        values = [item["audio_mean_abs"][channel] for item in results]
+        channel_spreads.append(max(values) - min(values))
+    passed = len(checksums) == len(results) and all(spread > 1.0 for spread in channel_spreads)
+    payload = {
+        "pass": passed,
+        "profiles": results,
+        "distinct_dvi_checksums": len(checksums),
+        "audio_mean_abs_spreads": channel_spreads,
+        "scope": "simulation-only; hardware timing and SRAM validation remain pending",
+    }
+    INHIBITION_STUDY.parent.mkdir(parents=True, exist_ok=True)
+    INHIBITION_STUDY.write_text(json.dumps(payload, indent=2) + "\n")
+    print("\n1024-neuron E/I inhibition-strength study")
+    print(" strength  DVI checksum       audio mean|x| ch0 / ch1 / ch2 / ch3")
+    for item in results:
+        audio = " / ".join(f"{value:7.1f}" for value in item["audio_mean_abs"])
+        print(f" {item['inhibitory_strength']:8d}  {item['dvi_checksum']}  {audio}")
+    print(" spreads                    " + " / ".join(f"{x:7.1f}" for x in channel_spreads))
+    print(f"\nOVERALL: {'PASS' if passed else 'FAIL'}")
+    print(f"Result: {INHIBITION_STUDY}")
+    if not passed:
+        raise SystemExit(1)
+    if args.with_build:
+        for strength in (512, 1536):
+            run([
+                sys.executable,
+                "src/top/snn_av/top.py",
+                "build",
+                "--hw", args.hw,
+                "--modeline", args.modeline,
+                "--self-test",
+                "--neurons", "1024",
+                "--physical-lanes", "32",
+                "--ei-ring",
+                "--inhibitory-strength", str(strength),
+                "--name", f"SNN-AV-1024X32-EI-{strength}-STUDY",
+            ])
+        inhibition_study_report(args)
+
+
+def inhibition_study_report(args: argparse.Namespace) -> None:
+    """Enforce R5 QoR for the two inhibition-strength study endpoints."""
+
+    for strength in (512, 1536):
+        print(f"\n1024-neuron E/I strength {strength} synthesis profile")
+        evaluate_bitstream(
+            ROOT / "build" / f"snn-av-1024x32-ei-{strength}-study-{args.hw}",
+            EI_RING_SYNTHESIS_CONTRACT,
+        )
+
+
 def make_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--hw", default="r5")
@@ -522,6 +608,8 @@ def make_parser() -> argparse.ArgumentParser:
         "memory", "memory-report",
         "kiloneuron", "kiloneuron-report",
         "ei-ring", "ei-ring-report",
+        "inhibition-study",
+        "inhibition-study-report",
     ):
         subparsers.add_parser(name)
     return parser
@@ -547,6 +635,8 @@ def main() -> None:
         "kiloneuron-report": kiloneuron_report,
         "ei-ring": ei_ring,
         "ei-ring-report": ei_ring_report,
+        "inhibition-study": inhibition_study,
+        "inhibition-study-report": inhibition_study_report,
     }
     commands[args.command](args)
 

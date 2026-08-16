@@ -39,14 +39,20 @@ class ParallelLIFBank(wiring.Component):
     rhythms without multipliers or RAM arbitration.
     """
 
-    def __init__(self, *, neuron_count=64, leak_shift=5, ei_ring=False):
+    def __init__(
+        self, *, neuron_count=64, leak_shift=5, ei_ring=False,
+        inhibitory_strength=1024,
+    ):
         if neuron_count < 8 or neuron_count > 1024 or neuron_count & (neuron_count - 1):
             raise ValueError("neuron_count must be a power of two in the range 8..1024")
         if not 2 <= leak_shift <= 8:
             raise ValueError("leak_shift must be in the range 2..8")
+        if inhibitory_strength not in range(256, 2049, 256):
+            raise ValueError("inhibitory_strength must be 256..2048 in steps of 256")
         self.neuron_count = neuron_count
         self.leak_shift = leak_shift
         self.ei_ring = ei_ring
+        self.inhibitory_strength = inhibitory_strength
         self.count_bits = (neuron_count + 1).bit_length()
         super().__init__({
             "i": In(stream.Signature(data.ArrayLayout(ASQ, 4))),
@@ -187,10 +193,20 @@ class ParallelLIFBank(wiring.Component):
                 ),
                 spike.eq(candidate >= dynamic_threshold),
             ]
-            if self.ei_ring and index % 4 == 0:
+            if self.ei_ring and index % 4 == 0 and self.inhibitory_strength == 1024:
                 m.d.comb += candidate.eq(Mux(
                     neighbor,
                     Mux(candidate_base >= 1024, candidate_base - 1024, 0),
+                    candidate_base,
+                ))
+            elif self.ei_ring and index % 4 == 0:
+                m.d.comb += candidate.eq(Mux(
+                    neighbor,
+                    Mux(
+                        candidate_base >= self.inhibitory_strength,
+                        candidate_base - self.inhibitory_strength,
+                        0,
+                    ),
                     candidate_base,
                 ))
             else:
@@ -705,7 +721,7 @@ class MemoryBatchedLIFBank(wiring.Component):
 
     def __init__(
         self, *, logical_neuron_count=512, physical_lane_count=32, leak_shift=5,
-        ei_ring=False,
+        ei_ring=False, inhibitory_strength=1024,
     ):
         if logical_neuron_count not in (512, 1024) or physical_lane_count != 32:
             raise ValueError(
@@ -720,6 +736,9 @@ class MemoryBatchedLIFBank(wiring.Component):
         self.count_bits = (logical_neuron_count + 1).bit_length()
         self.membrane_level_bits = 2 if logical_neuron_count == 1024 else 4
         self.ei_ring = ei_ring
+        if inhibitory_strength not in range(256, 2049, 256):
+            raise ValueError("inhibitory_strength must be 256..2048 in steps of 256")
+        self.inhibitory_strength = inhibitory_strength
         super().__init__({
             "i": In(stream.Signature(data.ArrayLayout(ASQ, 4))),
             "o": Out(stream.Signature(data.ArrayLayout(ASQ, 4))),
@@ -923,10 +942,20 @@ class MemoryBatchedLIFBank(wiring.Component):
                 ),
                 spike.eq(candidate >= dynamic_thresholds[lane % 16]),
             ]
-            if self.ei_ring and lane % 4 == 0:
+            if self.ei_ring and lane % 4 == 0 and self.inhibitory_strength == 1024:
                 m.d.comb += computed_candidate.eq(Mux(
                     neighbor,
                     Mux(candidate_base >= 1024, candidate_base - 1024, 0),
+                    candidate_base,
+                ))
+            elif self.ei_ring and lane % 4 == 0:
+                m.d.comb += computed_candidate.eq(Mux(
+                    neighbor,
+                    Mux(
+                        candidate_base >= self.inhibitory_strength,
+                        candidate_base - self.inhibitory_strength,
+                        0,
+                    ),
                     candidate_base,
                 ))
             else:

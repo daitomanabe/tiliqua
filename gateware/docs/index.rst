@@ -48,6 +48,7 @@ Tiliqua is a **Eurorack Module**, which contains a debugger, FPGA and high-fidel
    snn_512_live_hardware
    snn_1024_memory_hardware
    snn_1024_ei_hardware
+   snn_inhibition_strength_study
    fpga_dsp_library_comparison
    beamrace_video
    cpu_bitstreams

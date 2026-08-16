@@ -249,30 +249,40 @@ class ParallelLIFBankTests(unittest.TestCase):
             self.assertEqual(actual_sample[3], compressed_levels)
 
     def test_1024_ei_ring_matches_parallel_and_changes_dynamics(self):
-        expected = self.capture_network(
-            ParallelLIFBank(neuron_count=1024, ei_ring=True), sample_count=8
-        )
-        actual = self.capture_network(
-            MemoryBatchedLIFBank(
-                logical_neuron_count=1024,
-                physical_lane_count=32,
-                ei_ring=True,
-            ),
-            sample_count=8,
-        )
+        profiles = {}
+        for inhibitory_strength in (512, 1024, 1536):
+            expected = self.capture_network(
+                ParallelLIFBank(
+                    neuron_count=1024,
+                    ei_ring=True,
+                    inhibitory_strength=inhibitory_strength,
+                ),
+                sample_count=8,
+            )
+            actual = self.capture_network(
+                MemoryBatchedLIFBank(
+                    logical_neuron_count=1024,
+                    physical_lane_count=32,
+                    ei_ring=True,
+                    inhibitory_strength=inhibitory_strength,
+                ),
+                sample_count=8,
+            )
+            profiles[inhibitory_strength] = actual
+            for actual_sample, expected_sample in zip(actual, expected):
+                self.assertEqual(actual_sample[:3], expected_sample[:3])
+                expected_levels = expected_sample[3]
+                compressed_levels = 0
+                for index in range(1024):
+                    compressed_levels |= (
+                        ((expected_levels >> (index * 4)) & 0xF) >> 2
+                    ) << (index * 2)
+                self.assertEqual(actual_sample[3], compressed_levels)
         baseline = self.capture_network(
             ParallelLIFBank(neuron_count=1024), sample_count=8
         )
-        for actual_sample, expected_sample in zip(actual, expected):
-            self.assertEqual(actual_sample[:3], expected_sample[:3])
-            expected_levels = expected_sample[3]
-            compressed_levels = 0
-            for index in range(1024):
-                compressed_levels |= (
-                    ((expected_levels >> (index * 4)) & 0xF) >> 2
-                ) << (index * 2)
-            self.assertEqual(actual_sample[3], compressed_levels)
-        self.assertNotEqual(actual, baseline)
+        self.assertNotEqual(profiles[1024], baseline)
+        self.assertEqual(len({repr(profile) for profile in profiles.values()}), 3)
 
     def test_three_cv_controls_change_population_activity(self):
         weak_leak = self.mean_activity(1, -8_000)

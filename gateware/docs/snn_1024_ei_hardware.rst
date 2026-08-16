@@ -79,6 +79,13 @@ calibration EEPROMには触れません。
 liveの+/-2 V activity差は0.780 Vです。controlではstrong leakがactivity -0.146 V、burst 0.006 V、spike RMS
 0 Vまで止まり、positive recurrenceはactivityを3.180から7.879 Vへ増加させました。
 
+.. note::
+
+   上記live SHA ``60d57b...`` はTutorial 16時点で実機検証したarchiveです。Tutorial 17で抑制強度を
+   elaboration parameter化した現行sourceは、default 1024でもlive synthesis SHAが ``46f6f8...`` へ変わりました。
+   simulation/equivalence/timingはPASSしていますが、権限session終了後のbuildなので新SHAは実機未検証です。次sessionで
+   SRAM再試験するまで両者を混同しないでください。self-test SHAは ``362315...`` のまま一致しました。
+
 計測contractで得た知見
 -----------------------
 

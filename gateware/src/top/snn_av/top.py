@@ -42,7 +42,7 @@ class SNNAVTop(Elaboratable):
 
     def __init__(
         self, *, clock_settings, self_test=False, neuron_count=64,
-        physical_lane_count=None, ei_ring=False,
+        physical_lane_count=None, ei_ring=False, inhibitory_strength=1024,
     ):
         if clock_settings.modeline is None:
             raise ValueError("snn_av requires a fixed video mode")
@@ -52,6 +52,8 @@ class SNNAVTop(Elaboratable):
             )
         if ei_ring and (neuron_count != 1024 or physical_lane_count != 32):
             raise ValueError("E/I ring profile requires 1024 neurons and 32 lanes")
+        if not ei_ring and inhibitory_strength != 1024:
+            raise ValueError("inhibitory strength requires the E/I ring profile")
         if physical_lane_count is not None:
             valid_batched = (
                 neuron_count == 256
@@ -68,6 +70,7 @@ class SNNAVTop(Elaboratable):
         self.neuron_count = neuron_count
         self.physical_lane_count = physical_lane_count or neuron_count
         self.ei_ring = ei_ring
+        self.inhibitory_strength = inhibitory_strength
         self.pmod0 = eurorack_pmod.EurorackPmod(clock_settings.audio_clock)
         if neuron_count in (512, 1024):
             if physical_lane_count != 32:
@@ -78,6 +81,7 @@ class SNNAVTop(Elaboratable):
                 logical_neuron_count=neuron_count,
                 physical_lane_count=physical_lane_count,
                 ei_ring=ei_ring,
+                inhibitory_strength=inhibitory_strength,
             )
         elif physical_lane_count is None:
             self.core = ParallelLIFBank(neuron_count=neuron_count)
@@ -353,6 +357,12 @@ def argparse_callback(parser):
     parser.add_argument("--self-test", action="store_true")
     parser.add_argument("--ei-ring", action="store_true")
     parser.add_argument(
+        "--inhibitory-strength",
+        type=int,
+        choices=range(256, 2049, 256),
+        default=1024,
+    )
+    parser.add_argument(
         "--neurons", type=int, choices=(64, 128, 256, 512, 1024), default=64
     )
     parser.add_argument("--physical-lanes", type=int, choices=(32, 64, 128))
@@ -380,6 +390,7 @@ def argparse_fragment(args):
         "neuron_count": args.neurons,
         "physical_lane_count": args.physical_lanes,
         "ei_ring": args.ei_ring,
+        "inhibitory_strength": args.inhibitory_strength,
     }
 
 
