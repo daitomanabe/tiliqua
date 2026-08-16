@@ -22,10 +22,10 @@ live profileを合成する
 
     pdm snn_lab --with-build check
 
-4-input control追加後のlive profileはLUT4 7,334、FF 3,128、DSP 1でした。Fmaxはsync 64.21 MHz、
-audio 66.25 MHz、dvi 77.97 MHz、dvi5x 377.36 MHzで、全clockがcontractを通過しました。
+5段grouped reductionを使うlive profileはLUT4 7,815、FF 3,217、DSP 1でした。Fmaxはsync
+67.57 MHz、audio 67.44 MHz、dvi 85.05 MHz、dvi5x 425.35 MHzで、全clockがcontractを通過しました。
 bitstream SHA-256は
-``077686c34bf2a47de8b22614907237c0f464c5d281d3c3d69d7d1cb8faa99cce`` です。
+``5a38b6d76bbaafd38f55de9812458f20a7a0908b7f6c5f52a12a3ae8b531cfdb`` です。
 
 bounded bipolar stimulus
 ------------------------
@@ -82,38 +82,38 @@ baselineより0.25 V高い状態が0.5秒以上続くrunを抽出し、時系列
      - burst
      - membrane
    * - +0.5 V
-     - 0.757 V
+     - 0.752 V
      - -0.071 V
-     - 0.603 V
+     - 0.593 V
      - 2.857 V
    * - +1.0 V
-     - 1.148 V
-     - +0.006 V
-     - 1.671 V
+     - 1.140 V
+     - +0.005 V
+     - 1.673 V
      - 2.401 V
    * - +2.0 V
-     - 1.511 V
-     - +0.145 V
-     - 3.453 V
-     - 1.880 V
+     - 1.497 V
+     - +0.144 V
+     - 3.452 V
+     - 1.878 V
    * - -0.5 V
-     - 0.876 V
+     - 0.885 V
      - -0.049 V
-     - 0.901 V
-     - 2.788 V
+     - 0.914 V
+     - 2.787 V
    * - -1.0 V
-     - 1.253 V
-     - +0.035 V
-     - 2.066 V
+     - 1.249 V
+     - +0.034 V
+     - 2.074 V
      - 2.174 V
    * - -2.0 V
-     - 1.554 V
+     - 1.587 V
      - +0.163 V
-     - 3.635 V
-     - 1.848 V
+     - 3.586 V
+     - 1.847 V
 
-zero-drive baselineはactivity -0.112 V、burst +0.191 V、membrane +2.669 V、spike RMS
-0.526 Vです。6 runを全て検出し、正負それぞれの単調性がPASSしました。
+zero-drive baselineはactivity -0.112 V、burst +0.192 V、membrane +2.669 V、spike RMS
+0.525 Vです。6 runを全て検出し、正負それぞれの単調性がPASSしました。
 
 ``abs(input)`` を検査する
 ----------------------------------------
@@ -123,7 +123,7 @@ network driveはRTLで入力の絶対値を取ります。ただし物理 ``+x V
 正負差が相対的に大きくなります。
 
 offsetの影響が小さい ``+-2 V`` で対称性を確認します。実測差はactivity 0.019 V、burst
-0.164 V、membrane 0.032 V、spike RMS 0.014 Vで、全てlimit内でした。低振幅差をRTLの
+0.135 V、membrane 0.031 V、spike RMS 0.090 Vで、全てlimit内でした。低振幅差をRTLの
 非対称と誤診せず、必要なら物理ADC zeroを別に測定してから補正します。
 
 このテストが証明する範囲

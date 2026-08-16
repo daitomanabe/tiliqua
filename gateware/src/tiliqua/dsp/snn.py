@@ -80,6 +80,7 @@ class ParallelLIFBank(wiring.Component):
         output_payload = Signal(data.ArrayLayout(ASQ, 4))
         accept_input = Signal()
         pending_update = Signal()
+        pending_groups = Signal()
         pending_spikes = Signal()
         pending_output = Signal()
 
@@ -114,7 +115,7 @@ class ParallelLIFBank(wiring.Component):
                 Mux(threshold_control > 1000, 2, 1),
             )),
             accept_input.eq(
-                ~pending_update & ~pending_spikes & ~pending_output
+                ~pending_update & ~pending_groups & ~pending_spikes & ~pending_output
                 & (~output_valid | self.o.ready)
             ),
             self.i.ready.eq(accept_input),
@@ -174,6 +175,26 @@ class ParallelLIFBank(wiring.Component):
             next_membranes.append(Mux(spike, reset_level, candidate[:16]))
 
         next_spike_vector = Cat(*next_spikes)
+        group_size = 8
+        group_spike_counts = []
+        group_membrane_sums = []
+        next_group_spike_counts = []
+        next_group_membrane_sums = []
+        for group_start in range(0, self.neuron_count, group_size):
+            group_stop = group_start + group_size
+            group_spike_count = Signal(range(group_size + 1))
+            group_membrane_sum = Signal(range(group_size * 15 + 1))
+            group_spike_counts.append(group_spike_count)
+            group_membrane_sums.append(group_membrane_sum)
+            next_group_spike_counts.append(balanced_sum([
+                self.spike_vector[index]
+                for index in range(group_start, group_stop)
+            ]))
+            next_group_membrane_sums.append(balanced_sum([
+                self.membranes[index][12:16]
+                for index in range(group_start, group_stop)
+            ]))
+
         registered_spike_count = Signal(range(self.neuron_count + 1))
         membrane_sum = Signal(4 + self.count_bits)
         next_membrane_mean = Signal(16)
@@ -184,13 +205,13 @@ class ParallelLIFBank(wiring.Component):
         pulse_sample = Signal(signed(18))
         m.d.comb += [
             registered_spike_count.eq(balanced_sum([
-                self.spike_vector[index] for index in range(self.neuron_count)
+                group_spike_count for group_spike_count in group_spike_counts
             ])),
             # The fourth DAC channel is a monitor, so sum the upper four bits
             # and scale the population total. The neuron state itself remains
-            # 16-bit; narrowing only this reduction tree protects timing.
+            # 16-bit; narrowing and registering groups of eight protects timing.
             membrane_sum.eq(balanced_sum([
-                membrane[12:16] for membrane in self.membranes
+                group_membrane_sum for group_membrane_sum in group_membrane_sums
             ])),
             next_membrane_mean.eq(
                 membrane_sum << (12 - (self.neuron_count.bit_length() - 1))
@@ -206,18 +227,31 @@ class ParallelLIFBank(wiring.Component):
         ]
 
         # Stage 0 registers input drive and CV modes, stage 1 updates all
-        # neurons, stage 2 reduces the registered spike bits, and stage 3 maps
-        # population state to DAC channels. Four 60 MHz cycles are negligible
-        # inside one 48 kHz audio period and isolate the calibrated input path.
+        # neurons, stage 2 registers groups of eight, stage 3 reduces the group
+        # totals, and stage 4 maps population state to DAC channels. Five
+        # 60 MHz cycles are negligible inside one 48 kHz audio period.
         with m.If(pending_update):
             m.d.sync += [
                 pending_update.eq(0),
-                pending_spikes.eq(1),
+                pending_groups.eq(1),
                 self.spike_vector.eq(next_spike_vector),
                 self.sample_index.eq(self.sample_index + 1),
             ]
             for membrane, next_membrane in zip(self.membranes, next_membranes):
                 m.d.sync += membrane.eq(next_membrane)
+        with m.Elif(pending_groups):
+            m.d.sync += [
+                pending_groups.eq(0),
+                pending_spikes.eq(1),
+            ]
+            for group_spike_count, next_group_spike_count in zip(
+                group_spike_counts, next_group_spike_counts
+            ):
+                m.d.sync += group_spike_count.eq(next_group_spike_count)
+            for group_membrane_sum, next_group_membrane_sum in zip(
+                group_membrane_sums, next_group_membrane_sums
+            ):
+                m.d.sync += group_membrane_sum.eq(next_group_membrane_sum)
         with m.Elif(pending_spikes):
             m.d.sync += [
                 pending_spikes.eq(0),

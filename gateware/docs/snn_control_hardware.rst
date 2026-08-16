@@ -36,7 +36,8 @@ controlはcalibrated ASQ countが ``-1000`` 未満、``-1000..+1000``、``+1000`
 
 live profileではcalibrated ADCから64個のcandidate演算までが同じtransactionに属します。3 controlの
 decodeを各candidate pathへ直接足すとtiming marginが不安定になるため、入力振幅と3 modeをstage 0で
-registerします。続くneuron update、population reduction、DAC mappingと合わせ4段です。
+registerします。続くneuron update、8-neuron group reduction、population reduction、DAC mappingと
+合わせ5段です。
 
 また、16-bit signed最小値 ``-32768`` の単純な符号反転は同じ幅では表現できません。入力絶対値は
 この値だけ明示的にunsigned ``32768`` へ写像します。これは通常の ``-1..+1 V`` scanでは出ませんが、
@@ -49,8 +50,8 @@ monitor adder treeの余裕を増やす
 OUT 3は観測用なので内部16-bit状態を変えず、各膜電位の上位4-bitを加算し、64-neuron population和を
 ``<<6`` して出力します。平均を先に整数化しないため、64個の分数的な集合変化は保持されます。
 
-4 control追加後もlive profileはLUT4 7,334、FF 3,128、DSP 1、sync Fmax 64.21 MHzです。
-self-test profileは定数controlが最適化され、LUT4 5,359、FF 3,014、sync 68.95 MHzです。
+4 control追加後のlive profileはLUT4 7,815、FF 3,217、DSP 1、sync Fmax 67.57 MHzです。
+self-test profileは定数controlが最適化され、LUT4 5,086、FF 3,103、sync 85.47 MHzです。
 
 自動実機scan
 ------------
@@ -97,15 +98,15 @@ fresh実測
      - membrane
    * - leak
      - -1 V
-     - 1.451 V
-     - +0.113 V
-     - 3.072 V
+     - 1.473 V
+     - +0.112 V
+     - 3.038 V
      - 1.728 V
    * - leak
      - 0 V
-     - 1.141 V
+     - 1.133 V
      - +0.006 V
-     - 1.674 V
+     - 1.672 V
      - 2.401 V
    * - leak
      - +1 V
@@ -115,43 +116,43 @@ fresh実測
      - 2.024 V
    * - recurrence
      - -1 V
-     - 1.090 V
-     - +0.003 V
+     - 1.093 V
+     - +0.002 V
      - 1.638 V
      - 2.415 V
    * - recurrence
      - 0 V
-     - 1.130 V
+     - 1.136 V
      - +0.005 V
-     - 1.667 V
+     - 1.655 V
      - 2.401 V
    * - recurrence
      - +1 V
-     - 1.178 V
-     - +0.014 V
-     - 1.790 V
+     - 1.182 V
+     - +0.015 V
+     - 1.795 V
      - 2.306 V
    * - threshold
      - -1 V
-     - 1.320 V
+     - 1.277 V
      - +0.053 V
-     - 2.323 V
+     - 2.317 V
      - 1.892 V
    * - threshold
      - 0 V
-     - 1.121 V
-     - +0.006 V
-     - 1.668 V
-     - 2.401 V
+     - 1.132 V
+     - +0.005 V
+     - 1.656 V
+     - 2.400 V
    * - threshold
      - +1 V
-     - 0.986 V
-     - -0.032 V
-     - 1.114 V
-     - 2.907 V
+     - 1.002 V
+     - -0.033 V
+     - 1.116 V
+     - 2.905 V
 
-3回のneutral stateの最大差はactivity 0.0004 V、burst 0.0065 V、membrane 0.0002 V、
-spike RMS 0.0203 Vで全てrepeatability contract内です。
+3回のneutral stateの最大差はactivity 0.0004 V、burst 0.0168 V、membrane 0.0016 V、
+spike RMS 0.0042 Vで全てrepeatability contract内です。
 
 一回のcaptureへ過適合しない
 ---------------------------

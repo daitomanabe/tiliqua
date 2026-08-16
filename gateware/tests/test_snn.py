@@ -112,6 +112,32 @@ class ParallelLIFBankTests(unittest.TestCase):
         sim.add_testbench(bench)
         sim.run()
 
+    def test_grouped_reduction_is_exact_for_128_neurons(self):
+        dut = ParallelLIFBank(neuron_count=128)
+        checked = 0
+
+        async def bench(ctx):
+            nonlocal checked
+            ctx.set(dut.i.valid, 1)
+            ctx.set(dut.i.payload[0].as_value(), 12_000)
+            for index in range(1, 4):
+                ctx.set(dut.i.payload[index].as_value(), 0)
+            ctx.set(dut.o.ready, 1)
+            while checked < 64:
+                if ctx.get(dut.o.valid):
+                    self.assertEqual(
+                        ctx.get(dut.spike_count),
+                        ctx.get(dut.spike_vector).bit_count(),
+                    )
+                    checked += 1
+                await ctx.tick()
+
+        sim = Simulator(dut)
+        sim.add_clock(1e-6)
+        sim.add_testbench(bench)
+        sim.run()
+        self.assertEqual(checked, 64)
+
     def test_three_cv_controls_change_population_activity(self):
         weak_leak = self.mean_activity(1, -8_000)
         strong_leak = self.mean_activity(1, 8_000)

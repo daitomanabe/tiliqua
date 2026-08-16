@@ -22,6 +22,7 @@ ROOT = Path(__file__).resolve().parents[1]
 METRICS = ROOT / "snn-av-metrics.json"
 CONTRACT = ROOT / "snn" / "snn_contract.json"
 SYNTHESIS_CONTRACT = ROOT / "snn" / "snn_synthesis_contract.json"
+SCALE_SYNTHESIS_CONTRACT = ROOT / "snn" / "snn_128_synthesis_contract.json"
 
 
 def run(command: list[str]) -> None:
@@ -37,6 +38,7 @@ def doctor(_: argparse.Namespace) -> None:
         ROOT / "tests" / "test_snn.py",
         CONTRACT,
         SYNTHESIS_CONTRACT,
+        SCALE_SYNTHESIS_CONTRACT,
     ]
     missing = [str(path.relative_to(ROOT)) for path in required if not path.is_file()]
     if missing:
@@ -128,13 +130,43 @@ def check(args: argparse.Namespace) -> None:
         build(args)
 
 
+def scale(args: argparse.Namespace) -> None:
+    quick(args)
+    METRICS.unlink(missing_ok=True)
+    run([
+        sys.executable,
+        "src/top/snn_av/top.py",
+        "sim",
+        "--hw", args.hw,
+        "--modeline", args.modeline,
+        "--self-test",
+        "--neurons", "128",
+        "--name", "SNN-AV-128-LAB",
+    ])
+    report(args)
+    run([
+        sys.executable,
+        "src/top/snn_av/top.py",
+        "build",
+        "--hw", args.hw,
+        "--modeline", args.modeline,
+        "--self-test",
+        "--neurons", "128",
+        "--name", "SNN-AV-128-LAB",
+    ])
+    evaluate_bitstream(
+        ROOT / "build" / f"snn-av-128-lab-{args.hw}",
+        SCALE_SYNTHESIS_CONTRACT,
+    )
+
+
 def make_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--hw", default="r5")
     parser.add_argument("--modeline", default="720x720p60r2")
     parser.add_argument("--with-build", action="store_true")
     subparsers = parser.add_subparsers(dest="command", required=True)
-    for name in ("doctor", "quick", "sim", "report", "build", "check"):
+    for name in ("doctor", "quick", "sim", "report", "build", "check", "scale"):
         subparsers.add_parser(name)
     return parser
 
@@ -148,6 +180,7 @@ def main() -> None:
         "report": report,
         "build": build,
         "check": check,
+        "scale": scale,
     }
     commands[args.command](args)
 

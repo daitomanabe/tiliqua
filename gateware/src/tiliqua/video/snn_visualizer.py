@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: CERN-OHL-S-2.0
 
-"""Frame-buffer-free 8x8 neural activity visualizer."""
+"""Frame-buffer-free 8x8 or 16x8 neural activity visualizer."""
 
 from amaranth import Cat, Elaboratable, Module, Mux, Signal
 
@@ -11,13 +11,15 @@ class SNNVisualizer(Elaboratable):
     """Draw one cell per neuron from synchronized spike/membrane snapshots."""
 
     def __init__(self, *, neuron_count=64):
-        if neuron_count != 64:
-            raise ValueError("the first visualizer maps exactly 64 neurons to 8x8")
+        if neuron_count not in (64, 128):
+            raise ValueError("visualizer supports 64 (8x8) or 128 (16x8) neurons")
+        self.neuron_count = neuron_count
+        self.x_cell_shift = 6 if neuron_count == 64 else 5
         self.x = Signal(12)
         self.y = Signal(12)
         self.spikes = Signal(neuron_count)
         self.membrane_levels = Signal(neuron_count * 4)
-        self.activity = Signal(7)
+        self.activity = Signal((neuron_count + 1).bit_length())
         self.burst = Signal()
         self.frame = Signal(8)
         self.r = Signal(8)
@@ -29,7 +31,7 @@ class SNNVisualizer(Elaboratable):
 
         local_x = Signal(10)
         local_y = Signal(10)
-        neuron_index = Signal(6)
+        neuron_index = Signal(range(self.neuron_count))
         selected_spike = Signal()
         selected_level = Signal(4)
         inside_grid = Signal()
@@ -45,11 +47,15 @@ class SNNVisualizer(Elaboratable):
             ),
             local_x.eq(self.x - 104),
             local_y.eq(self.y - 104),
-            neuron_index.eq(Cat(local_x[6:9], local_y[6:9])),
+            neuron_index.eq(Cat(
+                local_x[self.x_cell_shift:9],
+                local_y[6:9],
+            )),
             selected_spike.eq(self.spikes.bit_select(neuron_index, 1)),
             selected_level.eq(self.membrane_levels.word_select(neuron_index, 4)),
             cell_edge.eq(
-                (local_x[0:6] < 2) | (local_x[0:6] >= 62)
+                (local_x[0:self.x_cell_shift] < 2)
+                | (local_x[0:self.x_cell_shift] >= (1 << self.x_cell_shift) - 2)
                 | (local_y[0:6] < 2) | (local_y[0:6] >= 62)
             ),
             checker.eq(self.x[5] ^ self.y[5] ^ self.frame[3]),

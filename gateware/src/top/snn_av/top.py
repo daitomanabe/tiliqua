@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: CERN-OHL-S-2.0
 
-"""64-neuron parallel spiking audio/video top for Tiliqua R5."""
+"""Parallel spiking audio/video top for Tiliqua R5."""
 
 from amaranth import ClockSignal, Elaboratable, Module, ResetSignal, Signal
 from amaranth.lib import data, wiring
@@ -20,9 +20,6 @@ from tiliqua.video import dvi
 from tiliqua.video.snn_visualizer import SNNVisualizer
 
 
-NEURON_COUNT = 64
-
-
 class SNNAVTop(Elaboratable):
     """Connect a parallel LIF population to calibrated audio and DVI."""
 
@@ -35,15 +32,18 @@ class SNNAVTop(Elaboratable):
         io_right=["", "", "8x8 neuron grid", "", "", ""],
     )
 
-    def __init__(self, *, clock_settings, self_test=False):
+    def __init__(self, *, clock_settings, self_test=False, neuron_count=64):
         if clock_settings.modeline is None:
             raise ValueError("snn_av requires a fixed video mode")
+        if neuron_count not in (64, 128):
+            raise ValueError("snn_av supports 64 or 128 neurons")
         self.clock_settings = clock_settings
         self.self_test = self_test
+        self.neuron_count = neuron_count
         self.pmod0 = eurorack_pmod.EurorackPmod(clock_settings.audio_clock)
-        self.core = ParallelLIFBank(neuron_count=NEURON_COUNT)
+        self.core = ParallelLIFBank(neuron_count=neuron_count)
         self.dvi_tgen = dvi.DVITimingGen()
-        self.visualizer = SNNVisualizer(neuron_count=NEURON_COUNT)
+        self.visualizer = SNNVisualizer(neuron_count=neuron_count)
 
         self.video_r = Signal(8)
         self.video_g = Signal(8)
@@ -53,15 +53,31 @@ class SNNAVTop(Elaboratable):
         self.test_sample_index = Signal(32)
         self.sim_regression_name = "SNN-AV"
         self.sim_metrics_filename = "snn-av-metrics.json"
+        self.bitstream_help = BitstreamHelp(
+            brief=f"{neuron_count}-neuron spiking audio/video network",
+            io_left=[
+                "network drive", "leak control", "recurrence control",
+                "threshold control", "spike audio", "population activity",
+                "burst gate", "mean membrane",
+            ],
+            io_right=[
+                "", "", f"{16 if neuron_count == 128 else 8}x8 neuron grid",
+                "", "", "",
+            ],
+        )
 
         if self_test:
             self.bitstream_help = BitstreamHelp(
-                brief="64-neuron deterministic spiking AV self-test",
+                brief=f"{neuron_count}-neuron deterministic spiking AV self-test",
                 io_left=[
                     "unused", "unused", "unused", "unused",
                     "spike audio", "population activity", "burst gate", "mean membrane",
                 ],
-                io_right=["", "", "8x8 neuron self-test", "", "", ""],
+                io_right=[
+                    "", "",
+                    f"{16 if neuron_count == 128 else 8}x8 SNN self-test",
+                    "", "", "",
+                ],
             )
         super().__init__()
 
@@ -104,9 +120,9 @@ class SNNAVTop(Elaboratable):
             m.d.comb += self.test_sample_index.eq(core.sample_index)
         wiring.connect(m, core.o, pmod0.i_cal)
 
-        video_spikes = Signal(NEURON_COUNT)
-        video_membranes = Signal(NEURON_COUNT * 4)
-        video_activity = Signal(7)
+        video_spikes = Signal(self.neuron_count)
+        video_membranes = Signal(self.neuron_count * 4)
+        video_activity = Signal(core.count_bits)
         video_burst = Signal()
         m.submodules.spike_cdc = FFSynchronizer(
             core.spike_vector, video_spikes, o_domain="dvi"
@@ -128,9 +144,9 @@ class SNNAVTop(Elaboratable):
 
         frame = Signal(8)
         previous_vsync = Signal()
-        frame_spikes = Signal(NEURON_COUNT)
-        frame_membranes = Signal(NEURON_COUNT * 4)
-        frame_activity = Signal(7)
+        frame_spikes = Signal(self.neuron_count)
+        frame_membranes = Signal(self.neuron_count * 4)
+        frame_activity = Signal(core.count_bits)
         frame_burst = Signal()
         m.d.dvi += previous_vsync.eq(dvi_tgen.ctrl.vsync)
         with m.If(dvi_tgen.ctrl.vsync & ~previous_vsync):
@@ -197,12 +213,16 @@ def simulation_ports(fragment):
 
 def argparse_callback(parser):
     parser.add_argument("--self-test", action="store_true")
+    parser.add_argument("--neurons", type=int, choices=(64, 128), default=64)
 
 
 def argparse_fragment(args):
-    if args.self_test and args.name == "SNN-AV":
-        args.name = "SNN-AV-LAB"
-    return {"self_test": args.self_test}
+    if args.name == "SNN-AV":
+        if args.self_test:
+            args.name = "SNN-AV-LAB" if args.neurons == 64 else "SNN-AV-128-LAB"
+        elif args.neurons == 128:
+            args.name = "SNN-AV-128"
+    return {"self_test": args.self_test, "neuron_count": args.neurons}
 
 
 if __name__ == "__main__":
