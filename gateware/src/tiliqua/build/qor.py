@@ -31,6 +31,19 @@ def parse_resource_report(
     return resources
 
 
+def parse_nextpnr_utilization(text: str) -> dict[str, tuple[int, int, int]]:
+    """Return nextpnr utilization entries as used, available, and percent."""
+
+    resources = {}
+    pattern = re.compile(
+        r"^Info:\s+([A-Z0-9_]+):\s+(\d+)/\s*(\d+)\s+(\d+)%$",
+        re.MULTILINE,
+    )
+    for name, used, available, percent in pattern.findall(text):
+        resources[name] = (int(used), int(available), int(percent))
+    return resources
+
+
 def parse_timing_summary(timing_lines: list[str]) -> dict[str, float]:
     """Extract achieved clock frequencies from final nextpnr summary lines."""
 

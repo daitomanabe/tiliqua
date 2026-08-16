@@ -6,6 +6,7 @@ import unittest
 
 from amaranth.sim import Simulator
 
+from tiliqua.build.qor import parse_nextpnr_utilization
 from tiliqua.dsp.snn import ParallelLIFBank, SNNTestSource
 
 
@@ -138,6 +139,32 @@ class ParallelLIFBankTests(unittest.TestCase):
         sim.run()
         self.assertEqual(checked, 64)
 
+    def test_grouped_reduction_is_exact_for_256_neurons(self):
+        dut = ParallelLIFBank(neuron_count=256)
+        checked = 0
+
+        async def bench(ctx):
+            nonlocal checked
+            ctx.set(dut.i.valid, 1)
+            ctx.set(dut.i.payload[0].as_value(), 12_000)
+            for index in range(1, 4):
+                ctx.set(dut.i.payload[index].as_value(), 0)
+            ctx.set(dut.o.ready, 1)
+            while checked < 16:
+                if ctx.get(dut.o.valid):
+                    self.assertEqual(
+                        ctx.get(dut.spike_count),
+                        ctx.get(dut.spike_vector).bit_count(),
+                    )
+                    checked += 1
+                await ctx.tick()
+
+        sim = Simulator(dut)
+        sim.add_clock(1e-6)
+        sim.add_testbench(bench)
+        sim.run()
+        self.assertEqual(checked, 16)
+
     def test_three_cv_controls_change_population_activity(self):
         weak_leak = self.mean_activity(1, -8_000)
         strong_leak = self.mean_activity(1, 8_000)
@@ -150,6 +177,18 @@ class ParallelLIFBankTests(unittest.TestCase):
         low_threshold = self.mean_activity(3, -8_000)
         high_threshold = self.mean_activity(3, 8_000)
         self.assertGreater(low_threshold, high_threshold)
+
+    def test_nextpnr_frontier_utilization_parser(self):
+        report = """
+Info: Device utilisation:
+Info:               TRELLIS_FF:   12342/  24288    50%
+Info:             TRELLIS_COMB:   35628/  24288   146%
+ERROR: Unable to find legal placement for all cells
+"""
+        self.assertEqual(
+            parse_nextpnr_utilization(report)["TRELLIS_COMB"],
+            (35_628, 24_288, 146),
+        )
 
 
 if __name__ == "__main__":

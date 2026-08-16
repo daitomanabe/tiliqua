@@ -16,6 +16,7 @@ import subprocess
 import sys
 
 from dslx_lab import evaluate_bitstream, evaluate_contract
+from tiliqua.build.qor import parse_nextpnr_utilization
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -23,6 +24,7 @@ METRICS = ROOT / "snn-av-metrics.json"
 CONTRACT = ROOT / "snn" / "snn_contract.json"
 SYNTHESIS_CONTRACT = ROOT / "snn" / "snn_synthesis_contract.json"
 SCALE_SYNTHESIS_CONTRACT = ROOT / "snn" / "snn_128_synthesis_contract.json"
+FRONTIER_CONTRACT = ROOT / "snn" / "snn_256_frontier_contract.json"
 
 
 def run(command: list[str]) -> None:
@@ -39,6 +41,7 @@ def doctor(_: argparse.Namespace) -> None:
         CONTRACT,
         SYNTHESIS_CONTRACT,
         SCALE_SYNTHESIS_CONTRACT,
+        FRONTIER_CONTRACT,
     ]
     missing = [str(path.relative_to(ROOT)) for path in required if not path.is_file()]
     if missing:
@@ -173,13 +176,100 @@ def scale(args: argparse.Namespace) -> None:
     )
 
 
+def frontier_report(args: argparse.Namespace) -> None:
+    """Prove that the 256-way fully parallel design crosses the R5 boundary."""
+
+    failures = load_and_report()
+    build_dir = ROOT / "build" / f"snn-av-256-lab-{args.hw}"
+    timing_path = build_dir / "top.tim"
+    report_path = build_dir / "top.rpt"
+    bitstream_path = build_dir / "top.bit"
+    if not timing_path.is_file() or not report_path.is_file():
+        raise SystemExit("256 frontier build did not produce top.tim and top.rpt")
+
+    contract = json.loads(FRONTIER_CONTRACT.read_text())
+    timing_text = timing_path.read_text()
+    resources = parse_nextpnr_utilization(timing_text)
+    resource_name = contract["expected_non_fit"]["resource"]
+    if resource_name not in resources:
+        failures.append(f"nextpnr report has no {resource_name} utilization")
+        used = available = percent = 0
+    else:
+        used, available, percent = resources[resource_name]
+        if used <= available:
+            failures.append(
+                f"{resource_name} no longer exceeds the device: {used}/{available}"
+            )
+        if percent < contract["expected_non_fit"]["minimum_percent"]:
+            failures.append(
+                f"{resource_name} utilization {percent}% below expected frontier"
+            )
+
+    expected_error = contract["expected_non_fit"]["error_substring"]
+    if expected_error not in timing_text:
+        failures.append("nextpnr did not report the expected legal-placement error")
+    if bitstream_path.exists():
+        failures.append("unexpected bitstream exists for the known non-fitting design")
+
+    print("\nSNN 256 fully-parallel frontier report")
+    print(f"  result             {'PASS' if not failures else 'FAIL'}")
+    print(f"  architecture       256 physical LIF lanes / 12.288 M updates/s")
+    print(f"  {resource_name:18} {used:>5} / {available:<5} ({percent}%)")
+    print(f"  placement          expected non-fit")
+    print(f"  bitstream          {'unexpected' if bitstream_path.exists() else 'not produced'}")
+    for failure in failures:
+        print(f"  failure            {failure}")
+    if failures:
+        raise SystemExit("256 fully-parallel frontier contract failed")
+
+
+def frontier(args: argparse.Namespace) -> None:
+    """Simulate 256 lanes, then require the characterized R5 non-fit result."""
+
+    quick(args)
+    METRICS.unlink(missing_ok=True)
+    run([
+        sys.executable,
+        "src/top/snn_av/top.py",
+        "sim",
+        "--hw", args.hw,
+        "--modeline", args.modeline,
+        "--self-test",
+        "--neurons", "256",
+        "--name", "SNN-AV-256-LAB",
+    ])
+    if load_and_report():
+        raise SystemExit("256 simulation contract failed")
+
+    command = [
+        sys.executable,
+        "src/top/snn_av/top.py",
+        "build",
+        "--hw", args.hw,
+        "--modeline", args.modeline,
+        "--self-test",
+        "--neurons", "256",
+        "--name", "SNN-AV-256-LAB",
+    ]
+    print(f"\n[run, expected non-fit] {' '.join(command)}", flush=True)
+    result = subprocess.run(command, cwd=ROOT, check=False)
+    if result.returncode == 0:
+        raise SystemExit(
+            "256 fully-parallel build now succeeds; replace the non-fit contract"
+        )
+    frontier_report(args)
+
+
 def make_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--hw", default="r5")
     parser.add_argument("--modeline", default="720x720p60r2")
     parser.add_argument("--with-build", action="store_true")
     subparsers = parser.add_subparsers(dest="command", required=True)
-    for name in ("doctor", "quick", "sim", "report", "build", "check", "scale"):
+    for name in (
+        "doctor", "quick", "sim", "report", "build", "check", "scale",
+        "frontier", "frontier-report",
+    ):
         subparsers.add_parser(name)
     return parser
 
@@ -194,6 +284,8 @@ def main() -> None:
         "build": build,
         "check": check,
         "scale": scale,
+        "frontier": frontier,
+        "frontier-report": frontier_report,
     }
     commands[args.command](args)
 

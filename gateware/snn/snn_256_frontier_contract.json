@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "profile": "snn_av_256_fully_parallel_expected_non_fit_r5_v1",
+  "expected_non_fit": {
+    "resource": "TRELLIS_COMB",
+    "minimum_percent": 120,
+    "error_substring": "Unable to find legal placement for all cells"
+  }
+}

@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: CERN-OHL-S-2.0
 
-"""Frame-buffer-free 8x8 or 16x8 neural activity visualizer."""
+"""Frame-buffer-free 8x8, 16x8, or 32x8 neural activity visualizer."""
 
 from amaranth import Cat, Elaboratable, Module, Mux, Signal
 
@@ -11,10 +11,10 @@ class SNNVisualizer(Elaboratable):
     """Draw one cell per neuron from synchronized spike/membrane snapshots."""
 
     def __init__(self, *, neuron_count=64):
-        if neuron_count not in (64, 128):
-            raise ValueError("visualizer supports 64 (8x8) or 128 (16x8) neurons")
+        if neuron_count not in (64, 128, 256):
+            raise ValueError("visualizer supports 64, 128, or 256 neurons")
         self.neuron_count = neuron_count
-        self.x_cell_shift = 6 if neuron_count == 64 else 5
+        self.x_cell_shift = {64: 6, 128: 5, 256: 4}[neuron_count]
         self.x = Signal(12)
         self.y = Signal(12)
         self.spikes = Signal(neuron_count)

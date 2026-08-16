@@ -35,8 +35,8 @@ class SNNAVTop(Elaboratable):
     def __init__(self, *, clock_settings, self_test=False, neuron_count=64):
         if clock_settings.modeline is None:
             raise ValueError("snn_av requires a fixed video mode")
-        if neuron_count not in (64, 128):
-            raise ValueError("snn_av supports 64 or 128 neurons")
+        if neuron_count not in (64, 128, 256):
+            raise ValueError("snn_av supports 64, 128, or 256 neurons")
         self.clock_settings = clock_settings
         self.self_test = self_test
         self.neuron_count = neuron_count
@@ -61,7 +61,7 @@ class SNNAVTop(Elaboratable):
                 "burst gate", "mean membrane",
             ],
             io_right=[
-                "", "", f"{16 if neuron_count == 128 else 8}x8 neuron grid",
+                "", "", f"{neuron_count // 8}x8 neuron grid",
                 "", "", "",
             ],
         )
@@ -75,7 +75,7 @@ class SNNAVTop(Elaboratable):
                 ],
                 io_right=[
                     "", "",
-                    f"{16 if neuron_count == 128 else 8}x8 SNN self-test",
+                    f"{neuron_count // 8}x8 SNN self-test",
                     "", "", "",
                 ],
             )
@@ -213,15 +213,18 @@ def simulation_ports(fragment):
 
 def argparse_callback(parser):
     parser.add_argument("--self-test", action="store_true")
-    parser.add_argument("--neurons", type=int, choices=(64, 128), default=64)
+    parser.add_argument("--neurons", type=int, choices=(64, 128, 256), default=64)
 
 
 def argparse_fragment(args):
     if args.name == "SNN-AV":
         if args.self_test:
-            args.name = "SNN-AV-LAB" if args.neurons == 64 else "SNN-AV-128-LAB"
-        elif args.neurons == 128:
-            args.name = "SNN-AV-128"
+            args.name = (
+                "SNN-AV-LAB" if args.neurons == 64
+                else f"SNN-AV-{args.neurons}-LAB"
+            )
+        elif args.neurons != 64:
+            args.name = f"SNN-AV-{args.neurons}"
     return {"self_test": args.self_test, "neuron_count": args.neurons}
 
 
