@@ -137,6 +137,35 @@ removes the repository-owned warning. This is separate from reset-domain logic
 such as ``ResetInserter`` and should not be used as a mechanical replacement
 for a synchronous reset signal.
 
+Background simulator stream cleanup
+-----------------------------------
+
+Reusable stream drivers often run as background simulator processes. If such a
+process is cancelled while waiting in ``ctx.tick().until(...)``, Amaranth 0.5.8
+can report ``aclose(): asynchronous generator is already running`` as a
+``PytestUnraisableExceptionWarning``. The handshake may still pass, but the
+warning obscures real failures and can appear under a later test during garbage
+collection.
+
+The stream helper now loops over one-shot edge samples instead:
+
+.. code-block:: python
+
+   while True:
+       _, reset, ready = await ctx.tick().sample(stream.ready)
+       if reset:
+           raise DomainReset
+       if ready:
+           break
+
+Simulator processes cannot use ``ctx.get()``; unlike ``until()``, awaiting a
+sampled tick returns the clock-edge flag and reset flag before sampled values.
+Preserving the reset check keeps the old ``DomainReset`` behavior. The same
+pattern is used for ``valid`` plus payload on reads. FFT 17/17 and the complete
+130-test suite passed after this change; full-suite warnings dropped from 94 to
+41. Remaining unraisable warnings come from direct ``repeat()`` users outside
+the stream helper and are separate cleanup work.
+
 Flashing to a Bitstream Slot
 ----------------------------
 

@@ -7,16 +7,28 @@
 #
 
 from amaranth.lib import stream
-from amaranth.sim import SimulatorContext
+from amaranth.sim import DomainReset, SimulatorContext
 
 async def put(ctx: SimulatorContext, stream: stream.Interface, payload):
     ctx.set(stream.valid, 1)
     ctx.set(stream.payload, payload)
-    await ctx.tick().until(stream.ready == 1)
+    while True:
+        _, reset, ready = await ctx.tick().sample(stream.ready)
+        if reset:
+            raise DomainReset
+        if ready:
+            break
     ctx.set(stream.valid, 0)
 
 async def get(ctx: SimulatorContext, stream: stream.Interface):
     ctx.set(stream.ready, 1)
-    payload, = await ctx.tick().sample(stream.payload).until(stream.valid == 1)
+    while True:
+        _, reset, valid, payload = await ctx.tick().sample(
+            stream.valid, stream.payload
+        )
+        if reset:
+            raise DomainReset
+        if valid:
+            break
     ctx.set(stream.ready, 0)
     return payload
