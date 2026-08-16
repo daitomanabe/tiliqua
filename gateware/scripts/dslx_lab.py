@@ -19,6 +19,7 @@ import sys
 
 from tiliqua.build.qor import (
     evaluate_synthesis_contract,
+    parse_nextpnr_utilization,
     parse_resource_report,
     parse_timing_summary,
 )
@@ -226,8 +227,9 @@ def evaluate_bitstream(
         report_path.read_text(), list(synthesis_contract["resources"])
     )
 
+    timing_text = timing_path.read_text()
     timing_lines = [
-        line.strip() for line in timing_path.read_text().splitlines()
+        line.strip() for line in timing_text.splitlines()
         if "Max frequency for clock" in line
     ][-4:]
     print("\nFPGA timing summary")
@@ -243,6 +245,25 @@ def evaluate_bitstream(
     failures = evaluate_synthesis_contract(
         resources, clocks, synthesis_contract
     )
+    device_limits = synthesis_contract.get(
+        "maximum_device_utilization_percent", {}
+    )
+    if device_limits:
+        device_resources = parse_nextpnr_utilization(timing_text)
+        print("\nFPGA physical utilization summary")
+        for name, maximum in device_limits.items():
+            if name not in device_resources:
+                failures.append(f"physical resource {name} was not found")
+                continue
+            used, available, percent = device_resources[name]
+            print(
+                f"  {name:18} {used:>5} / {available:<5} "
+                f"({percent}% / {maximum}% max)"
+            )
+            if percent > maximum:
+                failures.append(
+                    f"{name} physical utilization {percent}% exceeds {maximum}%"
+                )
     if any("FAIL" in line for line in timing_lines):
         failures.append("nextpnr reported a timing failure")
     for failure in failures:

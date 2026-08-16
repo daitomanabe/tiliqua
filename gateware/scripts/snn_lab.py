@@ -25,6 +25,9 @@ CONTRACT = ROOT / "snn" / "snn_contract.json"
 SYNTHESIS_CONTRACT = ROOT / "snn" / "snn_synthesis_contract.json"
 SCALE_SYNTHESIS_CONTRACT = ROOT / "snn" / "snn_128_synthesis_contract.json"
 FRONTIER_CONTRACT = ROOT / "snn" / "snn_256_frontier_contract.json"
+BATCHED_SYNTHESIS_CONTRACT = (
+    ROOT / "snn" / "snn_256x32_synthesis_contract.json"
+)
 
 
 def run(command: list[str]) -> None:
@@ -42,6 +45,7 @@ def doctor(_: argparse.Namespace) -> None:
         SYNTHESIS_CONTRACT,
         SCALE_SYNTHESIS_CONTRACT,
         FRONTIER_CONTRACT,
+        BATCHED_SYNTHESIS_CONTRACT,
     ]
     missing = [str(path.relative_to(ROOT)) for path in required if not path.is_file()]
     if missing:
@@ -260,15 +264,78 @@ def frontier(args: argparse.Namespace) -> None:
     frontier_report(args)
 
 
+def batch_report(args: argparse.Namespace) -> None:
+    """Enforce the 256x32 self bitstream and optional live bitstream."""
+
+    profiles = ("lab", "live") if args.with_live_build else ("lab",)
+    for profile in profiles:
+        print(f"\n256-logical / 32-lane {profile} profile")
+        evaluate_bitstream(
+            ROOT / "build" / f"snn-av-256x32-{profile}-{args.hw}",
+            BATCHED_SYNTHESIS_CONTRACT,
+        )
+
+
+def batch(args: argparse.Namespace) -> None:
+    """Run the complete 256-logical / 32-lane simulation and build gate."""
+
+    quick(args)
+    METRICS.unlink(missing_ok=True)
+    run([
+        sys.executable,
+        "src/top/snn_av/top.py",
+        "sim",
+        "--hw", args.hw,
+        "--modeline", args.modeline,
+        "--self-test",
+        "--neurons", "256",
+        "--physical-lanes", "32",
+        "--name", "SNN-AV-256X32-LAB",
+    ])
+    report(args)
+    profiles = [("LAB", True)]
+    if args.with_live_build:
+        profiles.append(("LIVE", False))
+    else:
+        print(
+            "\n[skip] 256x32 live P&R; pass --with-live-build for the "
+            "long-running experimental gate"
+        )
+    for profile, self_test in profiles:
+        command = [
+            sys.executable,
+            "src/top/snn_av/top.py",
+            "build",
+            "--hw", args.hw,
+            "--modeline", args.modeline,
+            "--neurons", "256",
+            "--physical-lanes", "32",
+            "--name", f"SNN-AV-256X32-{profile}",
+        ]
+        if self_test:
+            command.append("--self-test")
+        run(command)
+        evaluate_bitstream(
+            ROOT / "build" / f"snn-av-256x32-{profile.lower()}-{args.hw}",
+            BATCHED_SYNTHESIS_CONTRACT,
+        )
+
+
 def make_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--hw", default="r5")
     parser.add_argument("--modeline", default="720x720p60r2")
     parser.add_argument("--with-build", action="store_true")
+    parser.add_argument(
+        "--with-live-build",
+        action="store_true",
+        help="Batch only: include the long-running experimental live P&R",
+    )
     subparsers = parser.add_subparsers(dest="command", required=True)
     for name in (
         "doctor", "quick", "sim", "report", "build", "check", "scale",
         "frontier", "frontier-report",
+        "batch", "batch-report",
     ):
         subparsers.add_parser(name)
     return parser
@@ -286,6 +353,8 @@ def main() -> None:
         "scale": scale,
         "frontier": frontier,
         "frontier-report": frontier_report,
+        "batch": batch,
+        "batch-report": batch_report,
     }
     commands[args.command](args)
 

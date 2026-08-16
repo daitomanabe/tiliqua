@@ -12,7 +12,7 @@ from tiliqua.build import sim
 from tiliqua.build.cli import top_level_cli
 from tiliqua.build.types import BitstreamHelp
 from tiliqua.dsp import ASQ
-from tiliqua.dsp.snn import ParallelLIFBank, SNNTestSource
+from tiliqua.dsp.snn import BatchedLIFBank, ParallelLIFBank, SNNTestSource
 from tiliqua.dsp.stream_util import SyncFIFOBuffered
 from tiliqua.periph import eurorack_pmod
 from tiliqua.platform import RebootProvider
@@ -32,16 +32,32 @@ class SNNAVTop(Elaboratable):
         io_right=["", "", "8x8 neuron grid", "", "", ""],
     )
 
-    def __init__(self, *, clock_settings, self_test=False, neuron_count=64):
+    def __init__(
+        self, *, clock_settings, self_test=False, neuron_count=64,
+        physical_lane_count=None,
+    ):
         if clock_settings.modeline is None:
             raise ValueError("snn_av requires a fixed video mode")
         if neuron_count not in (64, 128, 256):
             raise ValueError("snn_av supports 64, 128, or 256 neurons")
+        if physical_lane_count is not None and (
+            neuron_count != 256 or physical_lane_count not in (32, 64, 128)
+        ):
+            raise ValueError(
+                "batched snn_av supports 256 neurons with 32, 64, or 128 lanes"
+            )
         self.clock_settings = clock_settings
         self.self_test = self_test
         self.neuron_count = neuron_count
+        self.physical_lane_count = physical_lane_count or neuron_count
         self.pmod0 = eurorack_pmod.EurorackPmod(clock_settings.audio_clock)
-        self.core = ParallelLIFBank(neuron_count=neuron_count)
+        if physical_lane_count is None:
+            self.core = ParallelLIFBank(neuron_count=neuron_count)
+        else:
+            self.core = BatchedLIFBank(
+                logical_neuron_count=neuron_count,
+                physical_lane_count=physical_lane_count,
+            )
         self.dvi_tgen = dvi.DVITimingGen()
         self.visualizer = SNNVisualizer(neuron_count=neuron_count)
 
@@ -53,8 +69,13 @@ class SNNAVTop(Elaboratable):
         self.test_sample_index = Signal(32)
         self.sim_regression_name = "SNN-AV"
         self.sim_metrics_filename = "snn-av-metrics.json"
+        architecture_brief = (
+            f"{neuron_count}-neuron spiking audio/video network"
+            if physical_lane_count is None
+            else f"{neuron_count}-neuron {physical_lane_count}-lane batched spiking AV"
+        )
         self.bitstream_help = BitstreamHelp(
-            brief=f"{neuron_count}-neuron spiking audio/video network",
+            brief=architecture_brief,
             io_left=[
                 "network drive", "leak control", "recurrence control",
                 "threshold control", "spike audio", "population activity",
@@ -68,7 +89,7 @@ class SNNAVTop(Elaboratable):
 
         if self_test:
             self.bitstream_help = BitstreamHelp(
-                brief=f"{neuron_count}-neuron deterministic spiking AV self-test",
+                brief=f"{architecture_brief} self-test",
                 io_left=[
                     "unused", "unused", "unused", "unused",
                     "spike audio", "population activity", "burst gate", "mean membrane",
@@ -214,18 +235,29 @@ def simulation_ports(fragment):
 def argparse_callback(parser):
     parser.add_argument("--self-test", action="store_true")
     parser.add_argument("--neurons", type=int, choices=(64, 128, 256), default=64)
+    parser.add_argument("--physical-lanes", type=int, choices=(32, 64, 128))
 
 
 def argparse_fragment(args):
     if args.name == "SNN-AV":
-        if args.self_test:
+        if args.physical_lanes is not None:
+            args.name = (
+                f"SNN-AV-{args.neurons}X{args.physical_lanes}-LAB"
+                if args.self_test
+                else f"SNN-AV-{args.neurons}X{args.physical_lanes}"
+            )
+        elif args.self_test:
             args.name = (
                 "SNN-AV-LAB" if args.neurons == 64
                 else f"SNN-AV-{args.neurons}-LAB"
             )
         elif args.neurons != 64:
             args.name = f"SNN-AV-{args.neurons}"
-    return {"self_test": args.self_test, "neuron_count": args.neurons}
+    return {
+        "self_test": args.self_test,
+        "neuron_count": args.neurons,
+        "physical_lane_count": args.physical_lanes,
+    }
 
 
 if __name__ == "__main__":

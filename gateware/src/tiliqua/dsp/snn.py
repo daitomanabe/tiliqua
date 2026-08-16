@@ -4,7 +4,7 @@
 
 """Parallel leaky-integrate-and-fire network for audio-rate experiments."""
 
-from amaranth import Cat, Const, Module, Mux, Signal, signed, unsigned
+from amaranth import Array, Cat, Const, Module, Mux, Signal, signed, unsigned
 from amaranth.lib import data, stream, wiring
 from amaranth.lib.wiring import In, Out
 
@@ -316,6 +316,362 @@ class ParallelLIFBank(wiring.Component):
                     leak_amounts, next_leak_amounts
                 ):
                     m.d.sync += leak_amount.eq(next_leak_amount)
+                for dynamic_threshold, next_dynamic_threshold in zip(
+                    dynamic_thresholds, next_dynamic_thresholds
+                ):
+                    m.d.sync += dynamic_threshold.eq(next_dynamic_threshold)
+
+        return m
+
+
+class BatchedLIFBank(wiring.Component):
+    """Preserve 256 logical neurons while reusing physical update lanes.
+
+    Both batches read the previous complete spike vector. Lower-state writes
+    therefore cannot influence the upper batch in the same audio sample, and
+    the result is sample-for-sample equivalent to :class:`ParallelLIFBank`.
+    """
+
+    def __init__(
+        self, *, logical_neuron_count=256, physical_lane_count=128, leak_shift=5
+    ):
+        if logical_neuron_count != 256 or physical_lane_count not in (32, 64, 128):
+            raise ValueError(
+                "batched LIF supports 256 neurons with 32, 64, or 128 lanes"
+            )
+        if logical_neuron_count % physical_lane_count:
+            raise ValueError("logical neuron count must divide into equal batches")
+        if not 2 <= leak_shift <= 8:
+            raise ValueError("leak_shift must be in the range 2..8")
+        self.neuron_count = logical_neuron_count
+        self.physical_lane_count = physical_lane_count
+        self.batch_count = logical_neuron_count // physical_lane_count
+        self.leak_shift = leak_shift
+        self.count_bits = (logical_neuron_count + 1).bit_length()
+        super().__init__({
+            "i": In(stream.Signature(data.ArrayLayout(ASQ, 4))),
+            "o": Out(stream.Signature(data.ArrayLayout(ASQ, 4))),
+        })
+
+        self.membranes = []
+        for index in range(logical_neuron_count):
+            threshold = ParallelLIFBank.threshold_for(index)
+            self.membranes.append(
+                Signal(16, init=(index * 997 + 313) % threshold,
+                       name=f"membrane_{index}")
+            )
+        self.spike_vector = Signal(logical_neuron_count)
+        self.membrane_levels = Signal(logical_neuron_count * 4)
+        self.spike_count = Signal(range(logical_neuron_count + 1))
+        self.sample_index = Signal(32)
+        self.leak_mode = Signal(2, init=1)
+        self.recurrent_mode = Signal(2, init=1)
+        self.threshold_mode = Signal(2, init=1)
+
+    def elaborate(self, platform):
+        m = Module()
+
+        output_valid = Signal()
+        output_payload = Signal(data.ArrayLayout(ASQ, 4))
+        accept_input = Signal()
+        pending_select = Signal()
+        pending_update = Signal()
+        batch_index = Signal(range(self.batch_count))
+        pending_groups = Signal()
+        pending_spikes = Signal()
+        pending_output = Signal()
+
+        input_sample = self.i.payload[0].as_value()
+        input_magnitude = Signal(16)
+        next_input_drive = Signal(11)
+        input_drive = Signal(11)
+        leak_control = self.i.payload[1].as_value()
+        recurrent_control = self.i.payload[2].as_value()
+        threshold_control = self.i.payload[3].as_value()
+        next_leak_mode = Signal(2)
+        next_recurrent_mode = Signal(2)
+        next_threshold_mode = Signal(2)
+        m.d.comb += [
+            input_magnitude.eq(Mux(
+                input_sample == -32768,
+                Const(32768, 16),
+                Mux(input_sample < 0, -input_sample, input_sample),
+            )),
+            next_input_drive.eq(input_magnitude >> 5),
+            next_leak_mode.eq(Mux(
+                leak_control < -1000, 0, Mux(leak_control > 1000, 2, 1)
+            )),
+            next_recurrent_mode.eq(Mux(
+                recurrent_control < -1000,
+                0,
+                Mux(recurrent_control > 1000, 2, 1),
+            )),
+            next_threshold_mode.eq(Mux(
+                threshold_control < -1000,
+                0,
+                Mux(threshold_control > 1000, 2, 1),
+            )),
+            accept_input.eq(
+                ~pending_select & ~pending_update & ~pending_groups
+                & ~pending_spikes & ~pending_output
+                & (~output_valid | self.o.ready)
+            ),
+            self.i.ready.eq(accept_input),
+            self.o.valid.eq(output_valid),
+            self.o.payload.eq(output_payload),
+            self.membrane_levels.eq(Cat(*[
+                membrane[12:16] for membrane in self.membranes
+            ])),
+        ]
+
+        dynamic_thresholds = []
+        next_dynamic_thresholds = []
+        for threshold_index in range(16):
+            threshold = ParallelLIFBank.threshold_for(threshold_index)
+            dynamic_threshold = Signal(14, name=f"dynamic_threshold_{threshold_index}")
+            next_dynamic_threshold = Signal(
+                14, name=f"next_dynamic_threshold_{threshold_index}"
+            )
+            m.d.comb += next_dynamic_threshold.eq(Mux(
+                next_threshold_mode == 0,
+                threshold - 800,
+                Mux(next_threshold_mode == 2, threshold + 800, threshold),
+            ))
+            dynamic_thresholds.append(dynamic_threshold)
+            next_dynamic_thresholds.append(next_dynamic_threshold)
+
+        recurrent_drive = Signal(self.count_bits + 3)
+        next_recurrent_drive = Signal.like(recurrent_drive)
+        m.d.comb += next_recurrent_drive.eq(Mux(
+            next_recurrent_mode == 0,
+            self.spike_count << 1,
+            Mux(
+                next_recurrent_mode == 2,
+                self.spike_count << 3,
+                self.spike_count << 2,
+            ),
+        ))
+
+        lane_leak_amounts = []
+        selected_membranes = []
+        selected_neighbors = []
+        selected_resets = []
+        selected_leaks = []
+        next_lane_spikes = []
+        next_lane_membranes = []
+        for lane in range(self.physical_lane_count):
+            batch_membranes = Array([
+                self.membranes[lane + batch * self.physical_lane_count]
+                for batch in range(self.batch_count)
+            ])
+            batch_neighbors = Array([
+                self.spike_vector[
+                    self.neuron_count - 1
+                    if lane == 0 and batch == 0
+                    else lane + batch * self.physical_lane_count - 1
+                ]
+                for batch in range(self.batch_count)
+            ])
+            batch_resets = Array([
+                Const(
+                    ((lane + batch * self.physical_lane_count) * 37 + 101)
+                    & 0x1FF,
+                    9,
+                )
+                for batch in range(self.batch_count)
+            ])
+            active_membrane = Signal(16, name=f"active_membrane_{lane}")
+            selected_membrane = Signal(16, name=f"selected_membrane_{lane}")
+            lane_leak = Signal(12, name=f"lane_leak_{lane}")
+            selected_leak = Signal(12, name=f"selected_leak_{lane}")
+            candidate = Signal(18, name=f"candidate_lane_{lane}")
+            spike = Signal(name=f"next_spike_lane_{lane}")
+            active_neighbor = Signal(name=f"active_neighbor_{lane}")
+            selected_neighbor = Signal(name=f"selected_neighbor_{lane}")
+            active_reset = Signal(9, name=f"active_reset_{lane}")
+            selected_reset = Signal(9, name=f"selected_reset_{lane}")
+            m.d.comb += [
+                active_membrane.eq(batch_membranes[batch_index]),
+                active_neighbor.eq(batch_neighbors[batch_index]),
+                active_reset.eq(batch_resets[batch_index]),
+                selected_leak.eq(Mux(
+                    self.leak_mode == 0,
+                    active_membrane >> 6,
+                    Mux(
+                        self.leak_mode == 2,
+                        active_membrane >> 4,
+                        active_membrane >> self.leak_shift,
+                    ),
+                )),
+                candidate.eq(
+                    selected_membrane
+                    - lane_leak
+                    + ParallelLIFBank.bias_for(lane)
+                    + input_drive
+                    + recurrent_drive
+                    + Mux(selected_neighbor, 256, 0)
+                ),
+                spike.eq(candidate >= dynamic_thresholds[lane % 16]),
+            ]
+            lane_leak_amounts.append(lane_leak)
+            selected_membranes.append((selected_membrane, active_membrane))
+            selected_neighbors.append((selected_neighbor, active_neighbor))
+            selected_resets.append((selected_reset, active_reset))
+            selected_leaks.append(selected_leak)
+            next_lane_spikes.append(spike)
+            next_lane_membranes.append(Mux(spike, selected_reset, candidate[:16]))
+
+        next_lane_spike_vector = Cat(*next_lane_spikes)
+        assembled_spike_vector = Signal(self.neuron_count)
+
+        group_size = 8
+        group_spike_counts = []
+        group_membrane_sums = []
+        next_group_spike_counts = []
+        next_group_membrane_sums = []
+        for group_start in range(0, self.neuron_count, group_size):
+            group_stop = group_start + group_size
+            group_spike_count = Signal(range(group_size + 1))
+            group_membrane_sum = Signal(range(group_size * 15 + 1))
+            group_spike_counts.append(group_spike_count)
+            group_membrane_sums.append(group_membrane_sum)
+            next_group_spike_counts.append(balanced_sum([
+                self.spike_vector[index]
+                for index in range(group_start, group_stop)
+            ]))
+            next_group_membrane_sums.append(balanced_sum([
+                self.membranes[index][12:16]
+                for index in range(group_start, group_stop)
+            ]))
+
+        registered_spike_count = Signal(range(self.neuron_count + 1))
+        membrane_sum = Signal(4 + self.count_bits)
+        next_membrane_mean = Signal(16)
+        membrane_mean = Signal(16)
+        membrane_scaled = Signal(17)
+        activity_scaled = Signal(17)
+        pulse_amplitude = Signal(18)
+        pulse_sample = Signal(signed(18))
+        m.d.comb += [
+            registered_spike_count.eq(balanced_sum(group_spike_counts)),
+            membrane_sum.eq(balanced_sum(group_membrane_sums)),
+            next_membrane_mean.eq(
+                membrane_sum << (12 - (self.neuron_count.bit_length() - 1))
+            ),
+            membrane_scaled.eq(membrane_mean << 1),
+            activity_scaled.eq(self.spike_count << 9),
+            pulse_amplitude.eq(self.spike_count << 12),
+            pulse_sample.eq(Mux(
+                self.sample_index[0],
+                -pulse_amplitude.as_signed(),
+                pulse_amplitude.as_signed(),
+            )),
+        ]
+
+        # Stage 0 registers controls. Each logical batch then has a select
+        # stage followed by an update stage, so the state mux and 18-bit
+        # candidate/compare chain never occupy the same sync path. All batches
+        # read the old complete spike vector. The grouped reduction and output
+        # stages then match ParallelLIFBank.
+        with m.If(pending_select):
+            m.d.sync += [pending_select.eq(0), pending_update.eq(1)]
+            for selected_membrane, active_membrane in selected_membranes:
+                m.d.sync += selected_membrane.eq(active_membrane)
+            for selected_neighbor, active_neighbor in selected_neighbors:
+                m.d.sync += selected_neighbor.eq(active_neighbor)
+            for selected_reset, active_reset in selected_resets:
+                m.d.sync += selected_reset.eq(active_reset)
+            for lane_leak, selected_leak in zip(
+                lane_leak_amounts, selected_leaks
+            ):
+                m.d.sync += lane_leak.eq(selected_leak)
+        with m.Elif(pending_update):
+            m.d.sync += [
+                assembled_spike_vector.word_select(
+                    batch_index, self.physical_lane_count
+                ).eq(next_lane_spike_vector),
+            ]
+            with m.Switch(batch_index):
+                for batch in range(self.batch_count):
+                    with m.Case(batch):
+                        for lane, next_membrane in enumerate(next_lane_membranes):
+                            m.d.sync += self.membranes[
+                                lane + batch * self.physical_lane_count
+                            ].eq(next_membrane)
+            with m.If(batch_index == self.batch_count - 1):
+                final_spike_parts = [
+                    assembled_spike_vector.word_select(
+                        batch, self.physical_lane_count
+                    )
+                    for batch in range(self.batch_count - 1)
+                ]
+                final_spike_parts.append(next_lane_spike_vector)
+                m.d.sync += [
+                    pending_update.eq(0),
+                    pending_groups.eq(1),
+                    self.spike_vector.eq(Cat(*final_spike_parts)),
+                    self.sample_index.eq(self.sample_index + 1),
+                ]
+            with m.Else():
+                m.d.sync += [
+                    pending_update.eq(0),
+                    pending_select.eq(1),
+                    batch_index.eq(batch_index + 1),
+                ]
+        with m.Elif(pending_groups):
+            m.d.sync += [pending_groups.eq(0), pending_spikes.eq(1)]
+            for group_spike_count, next_group_spike_count in zip(
+                group_spike_counts, next_group_spike_counts
+            ):
+                m.d.sync += group_spike_count.eq(next_group_spike_count)
+            for group_membrane_sum, next_group_membrane_sum in zip(
+                group_membrane_sums, next_group_membrane_sums
+            ):
+                m.d.sync += group_membrane_sum.eq(next_group_membrane_sum)
+        with m.Elif(pending_spikes):
+            m.d.sync += [
+                pending_spikes.eq(0),
+                pending_output.eq(1),
+                self.spike_count.eq(registered_spike_count),
+                membrane_mean.eq(next_membrane_mean),
+            ]
+        with m.Elif(pending_output):
+            m.d.sync += [
+                pending_output.eq(0),
+                output_valid.eq(1),
+                output_payload[0].as_value().eq(Mux(
+                    pulse_sample > 32767,
+                    32767,
+                    Mux(pulse_sample < -32768, -32768, pulse_sample[:16]),
+                )),
+                output_payload[1].as_value().eq(Mux(
+                    activity_scaled > 32767,
+                    32767,
+                    activity_scaled[:16],
+                )),
+                output_payload[2].eq(Mux(
+                    self.spike_count >= 2,
+                    asq_from_volts(5.0),
+                    0,
+                )),
+                output_payload[3].as_value().eq(Mux(
+                    membrane_scaled > 32767,
+                    32767,
+                    membrane_scaled[:16],
+                )),
+            ]
+        with m.Elif(accept_input):
+            m.d.sync += output_valid.eq(0)
+            with m.If(self.i.valid):
+                m.d.sync += [
+                    pending_select.eq(1),
+                    batch_index.eq(0),
+                    input_drive.eq(next_input_drive),
+                    recurrent_drive.eq(next_recurrent_drive),
+                    self.leak_mode.eq(next_leak_mode),
+                    self.recurrent_mode.eq(next_recurrent_mode),
+                    self.threshold_mode.eq(next_threshold_mode),
+                ]
                 for dynamic_threshold, next_dynamic_threshold in zip(
                     dynamic_thresholds, next_dynamic_thresholds
                 ):

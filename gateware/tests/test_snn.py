@@ -7,10 +7,38 @@ import unittest
 from amaranth.sim import Simulator
 
 from tiliqua.build.qor import parse_nextpnr_utilization
-from tiliqua.dsp.snn import ParallelLIFBank, SNNTestSource
+from tiliqua.dsp.snn import BatchedLIFBank, ParallelLIFBank, SNNTestSource
 
 
 class ParallelLIFBankTests(unittest.TestCase):
+
+    def capture_network(self, dut, sample_count):
+        outputs = []
+
+        async def bench(ctx):
+            ctx.set(dut.i.valid, 1)
+            ctx.set(dut.i.payload[0].as_value(), 12_000)
+            for index in range(1, 4):
+                ctx.set(dut.i.payload[index].as_value(), 0)
+            ctx.set(dut.o.ready, 1)
+            while len(outputs) < sample_count:
+                if ctx.get(dut.o.valid):
+                    outputs.append((
+                        tuple(
+                            ctx.get(dut.o.payload[channel].as_value())
+                            for channel in range(4)
+                        ),
+                        ctx.get(dut.spike_vector),
+                        ctx.get(dut.spike_count),
+                        ctx.get(dut.membrane_levels),
+                    ))
+                await ctx.tick()
+
+        sim = Simulator(dut)
+        sim.add_clock(1e-6)
+        sim.add_testbench(bench)
+        sim.run()
+        return outputs
 
     def mean_activity(self, channel, control):
         dut = ParallelLIFBank(neuron_count=16)
@@ -164,6 +192,21 @@ class ParallelLIFBankTests(unittest.TestCase):
         sim.add_testbench(bench)
         sim.run()
         self.assertEqual(checked, 16)
+
+    def test_256_logical_batches_match_fully_parallel_model(self):
+        expected = self.capture_network(
+            ParallelLIFBank(neuron_count=256), sample_count=32
+        )
+        for physical_lane_count in (128, 64, 32):
+            with self.subTest(physical_lane_count=physical_lane_count):
+                actual = self.capture_network(
+                    BatchedLIFBank(
+                        logical_neuron_count=256,
+                        physical_lane_count=physical_lane_count,
+                    ),
+                    sample_count=32,
+                )
+                self.assertEqual(actual, expected)
 
     def test_three_cv_controls_change_population_activity(self):
         weak_leak = self.mean_activity(1, -8_000)
