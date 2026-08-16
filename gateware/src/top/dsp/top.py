@@ -31,6 +31,7 @@ from tiliqua.build import sim
 from tiliqua.build.cli import top_level_cli
 from tiliqua.build.types import BitstreamHelp
 from tiliqua.dsp import ASQ, block, spectral
+from tiliqua.dsp.dslx_reactor import DSLXReactor
 from tiliqua.dsp.mix import CoeffUpdate
 from tiliqua.periph import eurorack_pmod, psram
 from tiliqua.platform import RebootProvider
@@ -1288,6 +1289,7 @@ CORES = {
     "noise":          (False, Noise),
     "dwo":            (False, DWO),
     "mmm":            (False, MidiMatrixMixer),
+    "dslx_reactor":   (False, DSLXReactor),
 }
 
 def simulation_ports(fragment):

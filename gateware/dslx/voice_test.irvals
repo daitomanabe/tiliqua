@@ -1,0 +1,8 @@
+(bits[16]:32768, bits[16]:0, bits[16]:32767, bits[2]:0, bits[2]:0)
+(bits[16]:32768, bits[16]:53536, bits[16]:32767, bits[2]:1, bits[2]:0)
+(bits[16]:32768, bits[16]:0, bits[16]:12345, bits[2]:2, bits[2]:0)
+(bits[16]:32768, bits[16]:12345, bits[16]:32767, bits[2]:3, bits[2]:3)
+(bits[16]:20000, bits[16]:0, bits[16]:0, bits[2]:0, bits[2]:1)
+(bits[16]:45536, bits[16]:0, bits[16]:0, bits[2]:0, bits[2]:1)
+(bits[16]:4096, bits[16]:0, bits[16]:0, bits[2]:0, bits[2]:2)
+(bits[16]:61440, bits[16]:0, bits[16]:0, bits[2]:0, bits[2]:3)

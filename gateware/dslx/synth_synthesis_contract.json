@@ -1,0 +1,19 @@
+{
+  "resources": {
+    "LUT4": {
+      "maximum": 1450
+    },
+    "TRELLIS_FF": {
+      "maximum": 1250
+    },
+    "MULT18X18D": {
+      "maximum": 2
+    }
+  },
+  "minimum_clock_mhz": {
+    "sync": 60.0,
+    "audio": 12.29,
+    "dvi": 39.07,
+    "dvi5x": 195.35
+  }
+}

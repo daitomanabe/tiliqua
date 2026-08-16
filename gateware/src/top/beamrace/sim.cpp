@@ -71,8 +71,8 @@ int main(int argc, char** argv) {
     tfp->dump(contextp->time());
 #endif
 
-    I2SDriver i2s_driver(top);
-    DVIDriver dvi_driver(top);
+    I2SDriver<Vtiliqua_soc> i2s_driver(top);
+    DVIDriver<Vtiliqua_soc> dvi_driver(top);
 
     for (int i = 0; i != 50000; ++i) {
         i2s_driver.inject_sample(0, (int16_t)10000.0*cos((float)i /  300.0));

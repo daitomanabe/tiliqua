@@ -26,6 +26,8 @@ from . import block, complex, delay_effect, fft, mac, spectral
 
 # Components that can be accessed directly using `dsp.VCA()`-like pattern
 from .delay_line import *
+from .dslx_adsr import *
+from .dslx_voice import *
 from .effects import *
 from .filters import *
 from .misc import *
@@ -34,6 +36,7 @@ from .oneshot import *
 from .oscillators import *
 from .resample import *
 from .stream_util import *
+from .synth import *
 from .vca import *
 from .voice_block import *
 

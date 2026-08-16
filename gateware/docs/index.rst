@@ -30,6 +30,12 @@ Tiliqua is a **Eurorack Module**, which contains a debugger, FPGA and high-fidel
    building_flashing
    audio_bitstreams
    custom_dsp
+   dslx_basic_av
+   dslx_synth_lab
+   dslx_synth_voice
+   dslx_playable_voice
+   dslx_live_synth
+   fpga_dsp_library_comparison
    beamrace_video
    cpu_bitstreams
    pmods

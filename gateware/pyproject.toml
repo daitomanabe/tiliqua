@@ -58,6 +58,8 @@ sampler            = "src/top/sampler/top.py"
 # (Non-SoC bitstreams)
 dsp                = "src/top/dsp/top.py"
 beamrace           = "src/top/beamrace/top.py"
+dslx_av            = "src/top/dslx_av/top.py"
+dslx_synth         = "src/top/dslx_synth/top.py"
 vectorscope_no_soc = "src/top/vectorscope_no_soc/top.py"
 bootstub           = "src/top/bootstub/top.py"
 usb_audio          = "src/top/usb_audio/top.py"
@@ -65,6 +67,8 @@ usb_host           = "src/top/usb_host/top.py"
 # Additional utilities
 test               = { cmd = "pytest -n auto tests/" }
 colors_vectorscope = { call = "top.vectorscope_no_soc.top:colors()" }
+dslx_lab            = "scripts/dslx_lab.py"
+dslx_synth_lab      = "scripts/dslx_synth_lab.py"
 # Documentation
 document.cmd = "sphinx-build docs/ docs/_build/ -W --keep-going"
 document-live.cmd = "sphinx-autobuild docs/ docs/_build/ --watch ."

@@ -9,6 +9,7 @@ import glob
 import os
 import shutil
 import subprocess
+import tempfile
 
 from amaranth              import *
 from amaranth.back         import verilog
@@ -192,9 +193,73 @@ def simulate(fragment, ports, harness, hw_platform, clock_settings, tracing=Fals
     clock_sync_hz = clock_settings.frequencies.sync
     audio_clk_hz = clock_settings.frequencies.audio
     fast_clk_hz = clock_settings.frequencies.fast
+    regression_cflags = []
+    if hasattr(fragment, "sim_regression_name"):
+        regression_cflags += [
+            "-CFLAGS",
+            f"-DREGRESSION_NAME=\\\"{fragment.sim_regression_name}\\\"",
+        ]
+    if hasattr(fragment, "sim_metrics_filename"):
+        regression_cflags += [
+            "-CFLAGS",
+            f"-DMETRICS_FILENAME=\\\"{fragment.sim_metrics_filename}\\\"",
+        ]
 
-    verilator_dst = "build/obj_dir"
-    shutil.rmtree(verilator_dst, ignore_errors=True)
+    original_workdir = os.getcwd()
+    logical_verilator_dst = os.path.abspath("build/obj_dir")
+    staging_context = None
+
+    # GNU Make files emitted by Verilator do not reliably escape whitespace in
+    # source paths. Stage only the compiled inputs in a short temporary path;
+    # generated frames, traces and metrics still land in the project directory.
+    if any(character.isspace() for character in original_workdir):
+        staging_context = tempfile.TemporaryDirectory(
+            prefix="tiliqua-verilator-"
+        )
+        verilator_workdir = staging_context.name
+        verilator_dst = os.path.join(verilator_workdir, "obj_dir")
+
+        harness_candidates = [
+            os.path.abspath(harness),
+            os.path.abspath(os.path.join(logical_verilator_dst, harness)),
+        ]
+        harness_source = next(
+            (candidate for candidate in harness_candidates if os.path.isfile(candidate)),
+            None,
+        )
+        if harness_source is None:
+            raise FileNotFoundError(f"simulation harness not found: {harness}")
+
+        staged_harness = os.path.join(
+            verilator_workdir, os.path.basename(harness_source)
+        )
+        staged_verilog = os.path.join(verilator_workdir, "tiliqua_soc.v")
+        shutil.copy(harness_source, staged_harness)
+        shutil.copy(dst, staged_verilog)
+
+        staged_extra_files = []
+        for file in sim_platform.files:
+            if file.endswith(".sv") or file.endswith(".v"):
+                source = os.path.join("build", file)
+                destination = os.path.join(verilator_workdir, os.path.basename(file))
+                shutil.copy(source, destination)
+                staged_extra_files.append(os.path.basename(destination))
+
+        verilator_mdir = "obj_dir"
+        verilator_harness = os.path.basename(staged_harness)
+        verilator_verilog = os.path.basename(staged_verilog)
+        verilator_extra_files = staged_extra_files
+    else:
+        verilator_workdir = original_workdir
+        verilator_dst = logical_verilator_dst
+        shutil.rmtree(verilator_dst, ignore_errors=True)
+        verilator_mdir = verilator_dst
+        verilator_harness = harness
+        verilator_verilog = dst
+        verilator_extra_files = [
+            file for file in sim_platform.files
+            if file.endswith(".sv") or file.endswith(".v")
+        ]
 
     # Copy shared testbench headers somewhere Verilator's build
     # process can see them.
@@ -217,24 +282,26 @@ def simulate(fragment, ports, harness, hw_platform, clock_settings, tracing=Fals
                            "-Wno-CMPCONST",
                            "-cc"] + tracing_flags + [
                            "--exe",
-                           "--Mdir", f"{verilator_dst}",
+                           "--Mdir", f"{verilator_mdir}",
                            "-Ibuild",
                            "--build",
                            "-j", "0",
                            "-CFLAGS", f"-DSYNC_CLK_HZ={clock_sync_hz}",
                            "-CFLAGS", f"-DAUDIO_CLK_HZ={audio_clk_hz}",
                            "-CFLAGS", f"-DFAST_CLK_HZ={fast_clk_hz}",
-                          ] + video_cflags + psram_cflags + firmware_cflags + bootinfo_cflags + [
-                           harness,
-                           f"{dst}",
-                          ] + [
-                               f for f in sim_platform.files
-                               if f.endswith(".sv") or f.endswith(".v")
-                          ],
-                          env=os.environ)
+                          ] + video_cflags + psram_cflags + firmware_cflags + bootinfo_cflags + regression_cflags + [
+                           verilator_harness,
+                           verilator_verilog,
+                          ] + verilator_extra_files,
+                          env=os.environ,
+                          cwd=verilator_workdir)
 
     print(f"run verilated binary '{verilator_dst}/Vtiliqua_soc'...")
     subprocess.check_call([f"{verilator_dst}/Vtiliqua_soc"],
-                          env=os.environ)
+                          env=os.environ,
+                          cwd=original_workdir)
+
+    if staging_context is not None:
+        staging_context.cleanup()
 
     print(f"done.")

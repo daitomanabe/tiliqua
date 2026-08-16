@@ -1,0 +1,6 @@
+(bits[12]:360, bits[12]:360, bits[12]:360, bits[12]:360, bits[16]:0, bits[1]:0, bits[16]:0, bits[8]:0)
+(bits[12]:0, bits[12]:0, bits[12]:360, bits[12]:360, bits[16]:0, bits[1]:0, bits[16]:0, bits[8]:0)
+(bits[12]:360, bits[12]:360, bits[12]:360, bits[12]:360, bits[16]:32767, bits[1]:1, bits[16]:32767, bits[8]:0)
+(bits[12]:32, bits[12]:0, bits[12]:360, bits[12]:360, bits[16]:0, bits[1]:0, bits[16]:0, bits[8]:0)
+(bits[12]:0, bits[12]:360, bits[12]:360, bits[12]:360, bits[16]:0, bits[1]:0, bits[16]:32767, bits[8]:0)
+(bits[12]:0, bits[12]:0, bits[12]:360, bits[12]:360, bits[16]:0, bits[1]:0, bits[16]:0, bits[8]:8)

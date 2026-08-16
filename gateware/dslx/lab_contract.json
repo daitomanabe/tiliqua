@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "profile": "dslx_av_self_test_v1",
+  "dvi": {
+    "minimum_frames": 3,
+    "minimum_pixels": 1000000,
+    "minimum_rgb_span": 8
+  },
+  "audio": {
+    "0": {
+      "minimum_samples": 1000,
+      "minimum_bipolar_peak": 8000
+    },
+    "1": {
+      "minimum_peak": 3000
+    },
+    "2": {
+      "maximum_floor": 1000,
+      "minimum_peak": 15000
+    },
+    "3": {
+      "minimum_peak": 8000
+    }
+  }
+}
