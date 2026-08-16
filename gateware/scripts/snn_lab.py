@@ -15,13 +15,17 @@ import shutil
 import subprocess
 import sys
 
+from amaranth.sim import Simulator
+
 from dslx_lab import evaluate_bitstream, evaluate_contract
 from tiliqua.build.qor import parse_nextpnr_utilization
+from tiliqua.dsp.snn import MemoryBatchedLIFBank
 
 
 ROOT = Path(__file__).resolve().parents[1]
 METRICS = ROOT / "snn-av-metrics.json"
 INHIBITION_STUDY = ROOT / "build" / "snn-inhibition-study.json"
+POPULATION_STUDY = ROOT / "build" / "snn-population-study.json"
 CONTRACT = ROOT / "snn" / "snn_contract.json"
 SYNTHESIS_CONTRACT = ROOT / "snn" / "snn_synthesis_contract.json"
 SCALE_SYNTHESIS_CONTRACT = ROOT / "snn" / "snn_128_synthesis_contract.json"
@@ -590,6 +594,149 @@ def inhibition_study_report(args: argparse.Namespace) -> None:
         )
 
 
+def capture_population_profile(inhibitory_strength: int) -> dict:
+    """Measure normalized E/I rates without changing the synthesized core."""
+
+    segment_samples = 192
+    warmup_samples = 64
+    dut = MemoryBatchedLIFBank(
+        logical_neuron_count=1024,
+        physical_lane_count=32,
+        ei_ring=True,
+        inhibitory_strength=inhibitory_strength,
+    )
+    rows = []
+    inhibitory_mask = sum(1 << index for index in range(3, 1024, 4))
+
+    async def bench(ctx):
+        ctx.set(dut.i.valid, 1)
+        for channel in range(1, 4):
+            ctx.set(dut.i.payload[channel].as_value(), 0)
+        ctx.set(dut.o.ready, 1)
+        while len(rows) < segment_samples * 2:
+            drive = 3_000 if len(rows) < segment_samples else 12_000
+            ctx.set(dut.i.payload[0].as_value(), drive)
+            if ctx.get(dut.o.valid):
+                spikes = ctx.get(dut.spike_vector)
+                inhibitory = (spikes & inhibitory_mask).bit_count()
+                excitatory = spikes.bit_count() - inhibitory
+                total = ctx.get(dut.spike_count)
+                if excitatory + inhibitory != total:
+                    raise AssertionError(
+                        "E/I population counts do not equal total spike count"
+                    )
+                rows.append((excitatory, inhibitory))
+            await ctx.tick()
+
+    sim = Simulator(dut)
+    sim.add_clock(1e-6)
+    sim.add_testbench(bench)
+    sim.run()
+
+    def summarize(segment):
+        excitatory_mean = sum(row[0] for row in segment) / len(segment)
+        inhibitory_mean = sum(row[1] for row in segment) / len(segment)
+        excitatory_rate = excitatory_mean / 768
+        inhibitory_rate = inhibitory_mean / 256
+        return {
+            "samples": len(segment),
+            "excitatory_mean_spikes": excitatory_mean,
+            "inhibitory_mean_spikes": inhibitory_mean,
+            "excitatory_rate_per_neuron": excitatory_rate,
+            "inhibitory_rate_per_neuron": inhibitory_rate,
+            "inhibitory_to_excitatory_rate_ratio": (
+                inhibitory_rate / excitatory_rate
+            ),
+        }
+
+    return {
+        "inhibitory_strength": inhibitory_strength,
+        "low_drive": summarize(rows[warmup_samples:segment_samples]),
+        "high_drive": summarize(
+            rows[segment_samples + warmup_samples:segment_samples * 2]
+        ),
+        "exact_total_count_checks": len(rows),
+    }
+
+
+def population_study(args: argparse.Namespace) -> None:
+    """Characterize excitatory and inhibitory population firing rates."""
+
+    quick(args)
+    strengths = (512, 1024, 1536)
+    profiles = [capture_population_profile(strength) for strength in strengths]
+    failures = []
+    for profile in profiles:
+        low = profile["low_drive"]
+        high = profile["high_drive"]
+        if min(
+            low["excitatory_rate_per_neuron"],
+            low["inhibitory_rate_per_neuron"],
+        ) <= 0:
+            failures.append(
+                f"strength {profile['inhibitory_strength']} silenced a population"
+            )
+        for population in ("excitatory", "inhibitory"):
+            key = f"{population}_rate_per_neuron"
+            if high[key] <= low[key]:
+                failures.append(
+                    f"strength {profile['inhibitory_strength']} {population} "
+                    "population did not respond to high drive"
+                )
+
+    for drive in ("low_drive", "high_drive"):
+        ratios = [
+            profile[drive]["inhibitory_to_excitatory_rate_ratio"]
+            for profile in profiles
+        ]
+        if ratios != sorted(ratios) or len(set(ratios)) != len(ratios):
+            failures.append(f"{drive} normalized E/I ratio is not strictly increasing")
+        excitatory_rates = [
+            profile[drive]["excitatory_rate_per_neuron"]
+            for profile in profiles
+        ]
+        if (
+            excitatory_rates != sorted(excitatory_rates, reverse=True)
+            or len(set(excitatory_rates)) != len(excitatory_rates)
+        ):
+            failures.append(f"{drive} excitatory rate is not strictly decreasing")
+
+    payload = {
+        "pass": not failures,
+        "profiles": profiles,
+        "failures": failures,
+        "stimulus": {
+            "low_drive_digital": 3000,
+            "high_drive_digital": 12000,
+            "segment_samples": 192,
+            "discarded_warmup_samples": 64,
+            "controls": "neutral",
+        },
+        "scope": "deterministic RTL simulation; no bitstream or hardware claim",
+    }
+    POPULATION_STUDY.parent.mkdir(parents=True, exist_ok=True)
+    POPULATION_STUDY.write_text(json.dumps(payload, indent=2) + "\n")
+
+    print("\n1024-neuron E/I population-rate study")
+    print(" strength drive   excit rate   inhib rate   inhib/excit")
+    for profile in profiles:
+        for drive in ("low_drive", "high_drive"):
+            item = profile[drive]
+            print(
+                f" {profile['inhibitory_strength']:8d} "
+                f"{drive.removesuffix('_drive'):>5}   "
+                f"{item['excitatory_rate_per_neuron']:.5f}      "
+                f"{item['inhibitory_rate_per_neuron']:.5f}      "
+                f"{item['inhibitory_to_excitatory_rate_ratio']:.5f}"
+            )
+    for failure in failures:
+        print(f" failure: {failure}")
+    print(f"\nOVERALL: {'PASS' if not failures else 'FAIL'}")
+    print(f"Result: {POPULATION_STUDY}")
+    if failures:
+        raise SystemExit(1)
+
+
 def make_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--hw", default="r5")
@@ -610,6 +757,7 @@ def make_parser() -> argparse.ArgumentParser:
         "ei-ring", "ei-ring-report",
         "inhibition-study",
         "inhibition-study-report",
+        "population-study",
     ):
         subparsers.add_parser(name)
     return parser
@@ -637,6 +785,7 @@ def main() -> None:
         "ei-ring-report": ei_ring_report,
         "inhibition-study": inhibition_study,
         "inhibition-study-report": inhibition_study_report,
+        "population-study": population_study,
     }
     commands[args.command](args)
 
