@@ -119,15 +119,15 @@ R5、720x720p60r2での結果です。
      - DSP
      - sync Fmax
    * - self-test
-     - 1200
+     - 1223
      - 1067
      - 2
-     - 78.58 MHz
+     - 79.71 MHz
    * - live-input
-     - 1309
+     - 1317
      - 1137
      - 2
-     - 73.66 MHz
+     - 71.83 MHz
    * - contract
      - 1450以下
      - 1250以下
@@ -146,4 +146,6 @@ R5、720x720p60r2での結果です。
 #. 必要なら個体校正値をfitして再buildする
 #. SPI flashへは、測定と長時間試験が完了するまで書き込まない
 
-現在はbitstream生成までで、接続中のTiliquaへはロードしていません。
+2026-08-17にself-test bitstreamをSRAMへロードし、ES-9で4出力を自動測定しました。
+C3/C4、ADSR、5 V gate、voice magnitudeの全contractがPASSしています。手順と実測値は
+:doc:`dslx_synth_hardware` を参照してください。live input版の自動CV/gate試験は次段階です。
