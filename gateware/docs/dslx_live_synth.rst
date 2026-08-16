@@ -148,4 +148,6 @@ R5、720x720p60r2での結果です。
 
 2026-08-17にself-test bitstreamをSRAMへロードし、ES-9で4出力を自動測定しました。
 C3/C4、ADSR、5 V gate、voice magnitudeの全contractがPASSしています。手順と実測値は
-:doc:`dslx_synth_hardware` を参照してください。live input版の自動CV/gate試験は次段階です。
+:doc:`dslx_synth_hardware` を参照してください。続いてlive input版もES-9の ``-1/0/+1 V``
+pitchと ``0/5 V`` gateで自動測定し、個体用 ``pitch_zero_counts=-307`` でC2/C3/C4が
+全てPASSしました。校正の導出は :doc:`dslx_synth_live_hardware` を参照してください。

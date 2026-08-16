@@ -118,7 +118,8 @@ PASSは次をまとめて証明します。
 
 一方、pitch/gate ADC input、DVI/TLQ-SCREEN、MIDI、PSRAM、SPI flash永続性はこの検査では証明
 しません。次は同じ配線のES-9 OUT 1/2から0/+1 V pitch CVと0/5 V gateを送り、
-``--self-test`` なしのlive-input bitstreamを測定します。
+``--self-test`` なしのlive-input bitstreamを測定します。続きは
+:doc:`dslx_synth_live_hardware` です。
 
 失敗時の読み方
 --------------
