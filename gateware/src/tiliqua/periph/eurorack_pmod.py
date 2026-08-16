@@ -829,7 +829,7 @@ class EurorackPmod(wiring.Component):
     hard_reset: In(1) # Strobe a 1 to hard reset the CODEC (pops!)
 
     # Indicates audio MCLK is changing, we should be held in reset
-    aclk_unstable: In(1, reset=0)
+    aclk_unstable: In(1, init=0)
 
     # 1s for automatic audio -> LED control. 0s for manual.
     led_mode: In(8, init=0xff)

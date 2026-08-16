@@ -125,6 +125,18 @@ test pass again. If a drifting dependency is genuinely required, declare and
 test an explicit MSRV-compatible version policy rather than relying on the
 library's lockfile to constrain downstream resolution.
 
+Amaranth signature initial values
+---------------------------------
+
+With Amaranth 0.5.8, ``wiring.In`` and ``wiring.Out`` signature members use
+``init=`` for their initial value. The older ``reset=`` keyword is deprecated;
+using it emits a warning while collecting every gateware test, even if the
+affected component is unrelated to the selected test. Replacing
+``In(1, reset=0)`` with ``In(1, init=0)`` preserves the zero initial value and
+removes the repository-owned warning. This is separate from reset-domain logic
+such as ``ResetInserter`` and should not be used as a mechanical replacement
+for a synchronous reset signal.
+
 Flashing to a Bitstream Slot
 ----------------------------
 
