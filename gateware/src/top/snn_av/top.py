@@ -4,9 +4,12 @@
 
 """Parallel spiking audio/video top for Tiliqua R5."""
 
-from amaranth import ClockSignal, Elaboratable, Module, ResetSignal, Signal
+from amaranth import (
+    ClockSignal, Elaboratable, Module, ResetSignal, Signal, unsigned,
+)
 from amaranth.lib import data, wiring
 from amaranth.lib.cdc import FFSynchronizer
+from amaranth.lib.memory import Memory
 
 from tiliqua.build import sim
 from tiliqua.build.cli import top_level_cli
@@ -43,24 +46,31 @@ class SNNAVTop(Elaboratable):
     ):
         if clock_settings.modeline is None:
             raise ValueError("snn_av requires a fixed video mode")
-        if neuron_count not in (64, 128, 256, 512):
-            raise ValueError("snn_av supports 64, 128, 256, or 512 neurons")
-        if physical_lane_count is not None and (
-            (neuron_count == 256 and physical_lane_count not in (32, 64, 128))
-            or (neuron_count == 512 and physical_lane_count != 32)
-            or neuron_count not in (256, 512)
-        ):
+        if neuron_count not in (64, 128, 256, 512, 1024):
             raise ValueError(
-                "batched snn_av supports 256x(32,64,128) or memory-backed 512x32"
+                "snn_av supports 64, 128, 256, 512, or 1024 neurons"
             )
+        if physical_lane_count is not None:
+            valid_batched = (
+                neuron_count == 256
+                and physical_lane_count in (32, 64, 128)
+            ) or (
+                neuron_count in (512, 1024) and physical_lane_count == 32
+            )
+            if not valid_batched:
+                raise ValueError(
+                    "batched snn_av supports 256x(32,64,128), 512x32, or 1024x32"
+                )
         self.clock_settings = clock_settings
         self.self_test = self_test
         self.neuron_count = neuron_count
         self.physical_lane_count = physical_lane_count or neuron_count
         self.pmod0 = eurorack_pmod.EurorackPmod(clock_settings.audio_clock)
-        if neuron_count == 512:
+        if neuron_count in (512, 1024):
             if physical_lane_count != 32:
-                raise ValueError("512-neuron snn_av requires 32 physical lanes")
+                raise ValueError(
+                    f"{neuron_count}-neuron snn_av requires 32 physical lanes"
+                )
             self.core = MemoryBatchedLIFBank(
                 logical_neuron_count=neuron_count,
                 physical_lane_count=physical_lane_count,
@@ -73,7 +83,12 @@ class SNNAVTop(Elaboratable):
                 physical_lane_count=physical_lane_count,
             )
         self.dvi_tgen = dvi.DVITimingGen()
-        self.visualizer = SNNVisualizer(neuron_count=neuron_count)
+        self.membrane_level_bits = getattr(self.core, "membrane_level_bits", 4)
+        self.visualizer = SNNVisualizer(
+            neuron_count=neuron_count,
+            membrane_level_bits=self.membrane_level_bits,
+            external_rows=neuron_count == 1024,
+        )
 
         self.video_r = Signal(8)
         self.video_g = Signal(8)
@@ -96,7 +111,10 @@ class SNNAVTop(Elaboratable):
                 "burst gate", "mean membrane",
             ],
             io_right=[
-                "", "", f"{neuron_count // 8}x8 neuron grid",
+                "", "", (
+                    "64x16 neuron grid" if neuron_count == 1024
+                    else f"{neuron_count // 8}x8 neuron grid"
+                ),
                 "", "", "",
             ],
         )
@@ -110,7 +128,10 @@ class SNNAVTop(Elaboratable):
                 ],
                 io_right=[
                     "", "",
-                    f"{neuron_count // 8}x8 SNN self-test",
+                    (
+                        "64x16 SNN self-test" if neuron_count == 1024
+                        else f"{neuron_count // 8}x8 SNN self-test"
+                    ),
                     "", "", "",
                 ],
             )
@@ -163,18 +184,59 @@ class SNNAVTop(Elaboratable):
         frame = Signal(8)
         previous_vsync = Signal()
         frame_spikes = Signal(self.neuron_count)
-        frame_membranes = Signal(self.neuron_count * 4)
+        frame_membranes = Signal(
+            self.neuron_count * self.membrane_level_bits
+        )
         frame_activity = Signal(core.count_bits)
         frame_burst = Signal()
         m.d.dvi += previous_vsync.eq(dvi_tgen.ctrl.vsync)
 
-        if self.neuron_count == 512:
+        if self.neuron_count == 1024:
+            # A dual-clock display RAM replaces thousands of direct bundled
+            # CDC wires. The sync side writes one 32-neuron row whenever the
+            # compute engine commits it; the DVI side reads the row containing
+            # the current cell. Cell borders hide the one-cycle BRAM read
+            # latency after an address change. Display state may span nearby
+            # audio samples, but computation and audio remain sample-atomic.
+            display_row_width = 32 * (1 + self.membrane_level_bits)
+            m.submodules.display_memory = display_memory = Memory(
+                shape=unsigned(display_row_width),
+                depth=self.neuron_count // 32,
+                init=[],
+                attrs={"ram_style": "block"},
+            )
+            display_write = display_memory.write_port(domain="sync")
+            display_read = display_memory.read_port(domain="dvi")
+            m.d.comb += [
+                display_write.addr.eq(core.display_row_addr),
+                display_write.data.eq(core.display_row_data),
+                display_write.en.eq(core.display_row_valid),
+                display_read.addr.eq(visualizer.external_row_addr),
+                display_read.en.eq(1),
+                visualizer.external_row_data.eq(display_read.data),
+            ]
+
+            video_activity = Signal(core.count_bits)
+            video_burst = Signal()
+            m.submodules.activity_cdc = FFSynchronizer(
+                core.spike_count, video_activity, o_domain="dvi"
+            )
+            m.submodules.burst_cdc = FFSynchronizer(
+                core.spike_count >= 2, video_burst, o_domain="dvi"
+            )
+            with m.If(dvi_tgen.ctrl.vsync & ~previous_vsync):
+                m.d.dvi += [
+                    frame.eq(frame + 1),
+                    frame_activity.eq(video_activity),
+                    frame_burst.eq(video_burst),
+                ]
+        elif self.neuron_count == 512:
             # The SNN state is stable for almost the complete 48 kHz sample.
             # Toggle synchronization therefore supplies a bundled-data CDC:
             # after two DVI cycles the multi-bit payload has already been
             # stable for multiple source/destination cycles. Capture only the
             # first new sample after vsync so one frame never tears, while
-            # avoiding two synchronizer FFs for every one of 2,560 data bits.
+            # avoiding two synchronizer FFs for every bundled payload bit.
             previous_sample_index = Signal.like(core.sample_index)
             snapshot_toggle = Signal()
             m.d.sync += previous_sample_index.eq(core.sample_index)
@@ -201,7 +263,9 @@ class SNNAVTop(Elaboratable):
                     ]
         else:
             video_spikes = Signal(self.neuron_count)
-            video_membranes = Signal(self.neuron_count * 4)
+            video_membranes = Signal(
+                self.neuron_count * self.membrane_level_bits
+            )
             video_activity = Signal(core.count_bits)
             video_burst = Signal()
             m.submodules.spike_cdc = FFSynchronizer(
@@ -281,7 +345,7 @@ def simulation_ports(fragment):
 def argparse_callback(parser):
     parser.add_argument("--self-test", action="store_true")
     parser.add_argument(
-        "--neurons", type=int, choices=(64, 128, 256, 512), default=64
+        "--neurons", type=int, choices=(64, 128, 256, 512, 1024), default=64
     )
     parser.add_argument("--physical-lanes", type=int, choices=(32, 64, 128))
 
@@ -289,7 +353,7 @@ def argparse_callback(parser):
 def argparse_fragment(args):
     if args.name == "SNN-AV":
         if args.physical_lanes is not None:
-            memory_suffix = "-MEM" if args.neurons == 512 else ""
+            memory_suffix = "-MEM" if args.neurons in (512, 1024) else ""
             args.name = (
                 f"SNN-AV-{args.neurons}X{args.physical_lanes}"
                 f"{memory_suffix}-LAB"

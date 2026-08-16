@@ -34,6 +34,12 @@ MEMORY_SYNTHESIS_CONTRACT = (
 MEMORY_LIVE_SYNTHESIS_CONTRACT = (
     ROOT / "snn" / "snn_512x32_memory_live_synthesis_contract.json"
 )
+KILONEURON_SYNTHESIS_CONTRACT = (
+    ROOT / "snn" / "snn_1024x32_memory_synthesis_contract.json"
+)
+KILONEURON_LIVE_SYNTHESIS_CONTRACT = (
+    ROOT / "snn" / "snn_1024x32_memory_live_synthesis_contract.json"
+)
 
 
 def run(command: list[str]) -> None:
@@ -54,6 +60,8 @@ def doctor(_: argparse.Namespace) -> None:
         BATCHED_SYNTHESIS_CONTRACT,
         MEMORY_SYNTHESIS_CONTRACT,
         MEMORY_LIVE_SYNTHESIS_CONTRACT,
+        KILONEURON_SYNTHESIS_CONTRACT,
+        KILONEURON_LIVE_SYNTHESIS_CONTRACT,
     ]
     missing = [str(path.relative_to(ROOT)) for path in required if not path.is_file()]
     if missing:
@@ -64,6 +72,7 @@ def doctor(_: argparse.Namespace) -> None:
     print("  base               64 fully parallel / 3.072 M updates/s")
     print("  batched            256 logical / 32 lanes / 12.288 M updates/s")
     print("  memory             512 logical / 32 lanes / 24.576 M updates/s")
+    print("  kiloneuron         1024 logical / 32 lanes / 49.152 M updates/s")
 
 
 def quick(_: argparse.Namespace) -> None:
@@ -386,6 +395,55 @@ def memory(args: argparse.Namespace) -> None:
     memory_report(args)
 
 
+def kiloneuron_report(args: argparse.Namespace) -> None:
+    """Enforce the 1024x32 block-memory self-test and live contracts."""
+
+    profiles = (
+        ("lab", KILONEURON_SYNTHESIS_CONTRACT),
+        ("live", KILONEURON_LIVE_SYNTHESIS_CONTRACT),
+    )
+    for profile, contract in profiles:
+        print(f"\n1024-logical / 32-lane block-memory {profile} profile")
+        evaluate_bitstream(
+            ROOT / "build" / f"snn-av-1024x32-mem-{profile}-{args.hw}",
+            contract,
+        )
+
+
+def kiloneuron(args: argparse.Namespace) -> None:
+    """Run 1024x32 equivalence, AV simulation, and both R5 build gates."""
+
+    quick(args)
+    METRICS.unlink(missing_ok=True)
+    run([
+        sys.executable,
+        "src/top/snn_av/top.py",
+        "sim",
+        "--hw", args.hw,
+        "--modeline", args.modeline,
+        "--self-test",
+        "--neurons", "1024",
+        "--physical-lanes", "32",
+        "--name", "SNN-AV-1024X32-MEM-LAB",
+    ])
+    report(args)
+    for profile, self_test in (("LAB", True), ("LIVE", False)):
+        command = [
+            sys.executable,
+            "src/top/snn_av/top.py",
+            "build",
+            "--hw", args.hw,
+            "--modeline", args.modeline,
+            "--neurons", "1024",
+            "--physical-lanes", "32",
+            "--name", f"SNN-AV-1024X32-MEM-{profile}",
+        ]
+        if self_test:
+            command.append("--self-test")
+        run(command)
+    kiloneuron_report(args)
+
+
 def make_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--hw", default="r5")
@@ -402,6 +460,7 @@ def make_parser() -> argparse.ArgumentParser:
         "frontier", "frontier-report",
         "batch", "batch-report",
         "memory", "memory-report",
+        "kiloneuron", "kiloneuron-report",
     ):
         subparsers.add_parser(name)
     return parser
@@ -423,6 +482,8 @@ def main() -> None:
         "batch-report": batch_report,
         "memory": memory,
         "memory-report": memory_report,
+        "kiloneuron": kiloneuron,
+        "kiloneuron-report": kiloneuron_report,
     }
     commands[args.command](args)
 

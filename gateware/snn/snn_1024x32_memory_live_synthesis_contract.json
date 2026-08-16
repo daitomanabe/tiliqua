@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "profile": "snn_av_1024_logical_32_lane_memory_live_r5_v1",
+  "resources": {
+    "LUT4": {"maximum": 6200},
+    "TRELLIS_FF": {"maximum": 5600},
+    "DP16KD": {"maximum": 19},
+    "MULT18X18D": {"maximum": 2}
+  },
+  "maximum_device_utilization_percent": {
+    "TRELLIS_COMB": 40,
+    "TRELLIS_FF": 25,
+    "DP16KD": 35
+  },
+  "minimum_clock_mhz": {
+    "sync": 60.0,
+    "audio": 12.29,
+    "dvi": 39.07,
+    "dvi5x": 195.35
+  }
+}

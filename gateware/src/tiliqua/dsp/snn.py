@@ -40,8 +40,8 @@ class ParallelLIFBank(wiring.Component):
     """
 
     def __init__(self, *, neuron_count=64, leak_shift=5):
-        if neuron_count < 8 or neuron_count > 512 or neuron_count & (neuron_count - 1):
-            raise ValueError("neuron_count must be a power of two in the range 8..512")
+        if neuron_count < 8 or neuron_count > 1024 or neuron_count & (neuron_count - 1):
+            raise ValueError("neuron_count must be a power of two in the range 8..1024")
         if not 2 <= leak_shift <= 8:
             raise ValueError("leak_shift must be in the range 2..8")
         self.neuron_count = neuron_count
@@ -349,6 +349,7 @@ class BatchedLIFBank(wiring.Component):
         self.batch_count = logical_neuron_count // physical_lane_count
         self.leak_shift = leak_shift
         self.count_bits = (logical_neuron_count + 1).bit_length()
+        self.membrane_level_bits = 2 if logical_neuron_count == 1024 else 4
         super().__init__({
             "i": In(stream.Signature(data.ArrayLayout(ASQ, 4))),
             "o": Out(stream.Signature(data.ArrayLayout(ASQ, 4))),
@@ -682,7 +683,7 @@ class BatchedLIFBank(wiring.Component):
 
 
 class MemoryBatchedLIFBank(wiring.Component):
-    """Update 512 logical neurons from a 32-lane block-memory state row.
+    """Update 512 or 1024 logical neurons from 32-lane block-memory rows.
 
     One 512-bit memory word contains the 32 membrane values for a logical
     batch. A synchronous read, row capture, candidate, and compare/write
@@ -694,9 +695,9 @@ class MemoryBatchedLIFBank(wiring.Component):
     def __init__(
         self, *, logical_neuron_count=512, physical_lane_count=32, leak_shift=5
     ):
-        if logical_neuron_count != 512 or physical_lane_count != 32:
+        if logical_neuron_count not in (512, 1024) or physical_lane_count != 32:
             raise ValueError(
-                "memory-batched LIF supports 512 neurons with 32 lanes"
+                "memory-batched LIF supports 512 or 1024 neurons with 32 lanes"
             )
         if not 2 <= leak_shift <= 8:
             raise ValueError("leak_shift must be in the range 2..8")
@@ -705,6 +706,7 @@ class MemoryBatchedLIFBank(wiring.Component):
         self.batch_count = logical_neuron_count // physical_lane_count
         self.leak_shift = leak_shift
         self.count_bits = (logical_neuron_count + 1).bit_length()
+        self.membrane_level_bits = 2 if logical_neuron_count == 1024 else 4
         super().__init__({
             "i": In(stream.Signature(data.ArrayLayout(ASQ, 4))),
             "o": Out(stream.Signature(data.ArrayLayout(ASQ, 4))),
@@ -719,17 +721,28 @@ class MemoryBatchedLIFBank(wiring.Component):
                 threshold = ParallelLIFBank.threshold_for(index)
                 membrane = (index * 997 + 313) % threshold
                 row |= membrane << (lane * 16)
-                initial_levels |= ((membrane >> 12) & 0xF) << (index * 4)
+                initial_levels |= (
+                    (membrane >> (16 - self.membrane_level_bits))
+                    & ((1 << self.membrane_level_bits) - 1)
+                ) << (index * self.membrane_level_bits)
             initial_rows.append(row)
         self.initial_rows = initial_rows
 
         self.spike_vector = Signal(logical_neuron_count)
-        self.membrane_levels = Signal(logical_neuron_count * 4, init=initial_levels)
+        self.membrane_levels = Signal(
+            logical_neuron_count * self.membrane_level_bits,
+            init=initial_levels,
+        )
         self.spike_count = Signal(range(logical_neuron_count + 1))
         self.sample_index = Signal(32)
         self.leak_mode = Signal(2, init=1)
         self.recurrent_mode = Signal(2, init=1)
         self.threshold_mode = Signal(2, init=1)
+        self.display_row_valid = Signal()
+        self.display_row_addr = Signal(range(self.batch_count))
+        self.display_row_data = Signal(
+            self.physical_lane_count * (1 + self.membrane_level_bits)
+        )
 
     def elaborate(self, platform):
         m = Module()
@@ -743,6 +756,7 @@ class MemoryBatchedLIFBank(wiring.Component):
         pending_update = Signal()
         batch_index = Signal(range(self.batch_count))
         pending_groups = Signal()
+        pending_supergroups = Signal()
         pending_spikes = Signal()
         pending_output = Signal()
 
@@ -779,6 +793,7 @@ class MemoryBatchedLIFBank(wiring.Component):
             accept_input.eq(
                 ~pending_read & ~pending_capture & ~pending_candidate
                 & ~pending_update & ~pending_groups
+                & ~pending_supergroups
                 & ~pending_spikes & ~pending_output
                 & (~output_valid | self.o.ready)
             ),
@@ -902,10 +917,39 @@ class MemoryBatchedLIFBank(wiring.Component):
 
         next_lane_spike_vector = Cat(*next_lane_spikes)
         next_lane_membrane_levels = Cat(*[
-            membrane[12:16] for membrane in next_lane_membranes
+            membrane[16 - self.membrane_level_bits:16]
+            for membrane in next_lane_membranes
         ])
-        m.d.comb += state_write.data.eq(Cat(*next_lane_membranes))
+        next_display_row = Cat(*[
+            Cat(
+                spike,
+                membrane[16 - self.membrane_level_bits:16],
+            )
+            for spike, membrane in zip(next_lane_spikes, next_lane_membranes)
+        ])
+        m.d.comb += [
+            state_write.data.eq(Cat(*next_lane_membranes)),
+            self.display_row_valid.eq(pending_update),
+            self.display_row_addr.eq(batch_index),
+            self.display_row_data.eq(next_display_row),
+        ]
         assembled_spike_vector = Signal(self.neuron_count)
+
+        # The 1024 profile accumulates exact population statistics while each
+        # 32-neuron row is already present in the arithmetic lanes. This
+        # removes the large post-update reduction trees and lets the per-neuron
+        # video shadow use two bits without changing any of the four audio
+        # outputs or the neural state itself.
+        batch_spike_count = Signal(range(self.physical_lane_count + 1))
+        batch_membrane_sum = Signal(range(self.physical_lane_count * 15 + 1))
+        sample_spike_accumulator = Signal(range(self.neuron_count + 1))
+        sample_membrane_accumulator = Signal(range(self.neuron_count * 15 + 1))
+        m.d.comb += [
+            batch_spike_count.eq(balanced_sum(next_lane_spikes)),
+            batch_membrane_sum.eq(balanced_sum([
+                membrane[12:16] for membrane in next_lane_membranes
+            ])),
+        ]
 
         group_size = 8
         group_spike_counts = []
@@ -927,6 +971,27 @@ class MemoryBatchedLIFBank(wiring.Component):
                 for index in range(group_start, group_stop)
             ]))
 
+        # A 1024-neuron population has 128 group values. Register groups of
+        # eight before the final reduction so the monitoring/audio path does
+        # not grow an extra routed adder level. The 512 profile keeps its
+        # established two-stage aggregation and therefore its existing QoR.
+        supergroup_spike_counts = []
+        supergroup_membrane_sums = []
+        next_supergroup_spike_counts = []
+        next_supergroup_membrane_sums = []
+        if self.neuron_count == 1024:
+            for supergroup_start in range(0, len(group_spike_counts), 8):
+                supergroup_spike_count = Signal(range(65))
+                supergroup_membrane_sum = Signal(range(8 * group_size * 15 + 1))
+                supergroup_spike_counts.append(supergroup_spike_count)
+                supergroup_membrane_sums.append(supergroup_membrane_sum)
+                next_supergroup_spike_counts.append(balanced_sum(
+                    group_spike_counts[supergroup_start:supergroup_start + 8]
+                ))
+                next_supergroup_membrane_sums.append(balanced_sum(
+                    group_membrane_sums[supergroup_start:supergroup_start + 8]
+                ))
+
         registered_spike_count = Signal(range(self.neuron_count + 1))
         membrane_sum = Signal(4 + self.count_bits)
         next_membrane_mean = Signal(16)
@@ -936,8 +1001,14 @@ class MemoryBatchedLIFBank(wiring.Component):
         pulse_amplitude = Signal(self.count_bits + 13)
         pulse_sample = Signal(signed(self.count_bits + 13))
         m.d.comb += [
-            registered_spike_count.eq(balanced_sum(group_spike_counts)),
-            membrane_sum.eq(balanced_sum(group_membrane_sums)),
+            registered_spike_count.eq(balanced_sum(
+                supergroup_spike_counts
+                if self.neuron_count == 1024 else group_spike_counts
+            )),
+            membrane_sum.eq(balanced_sum(
+                supergroup_membrane_sums
+                if self.neuron_count == 1024 else group_membrane_sums
+            )),
             next_membrane_mean.eq(
                 membrane_sum << (12 - (self.neuron_count.bit_length() - 1))
             ),
@@ -986,7 +1057,8 @@ class MemoryBatchedLIFBank(wiring.Component):
                     batch_index, self.physical_lane_count
                 ).eq(next_lane_spike_vector),
                 self.membrane_levels.word_select(
-                    batch_index, self.physical_lane_count * 4
+                    batch_index,
+                    self.physical_lane_count * self.membrane_level_bits,
                 ).eq(next_lane_membrane_levels),
             ]
             with m.If(batch_index == self.batch_count - 1):
@@ -999,18 +1071,43 @@ class MemoryBatchedLIFBank(wiring.Component):
                 final_spike_parts.append(next_lane_spike_vector)
                 m.d.sync += [
                     pending_update.eq(0),
-                    pending_groups.eq(1),
                     self.spike_vector.eq(Cat(*final_spike_parts)),
                     self.sample_index.eq(self.sample_index + 1),
                 ]
+                if self.neuron_count == 1024:
+                    m.d.sync += [
+                        pending_output.eq(1),
+                        self.spike_count.eq(
+                            sample_spike_accumulator + batch_spike_count
+                        ),
+                        membrane_mean.eq(
+                            (sample_membrane_accumulator + batch_membrane_sum)
+                            << 2
+                        ),
+                    ]
+                else:
+                    m.d.sync += pending_groups.eq(1)
             with m.Else():
                 m.d.sync += [
                     pending_update.eq(0),
                     pending_read.eq(1),
                     batch_index.eq(batch_index + 1),
                 ]
+                if self.neuron_count == 1024:
+                    m.d.sync += [
+                        sample_spike_accumulator.eq(
+                            sample_spike_accumulator + batch_spike_count
+                        ),
+                        sample_membrane_accumulator.eq(
+                            sample_membrane_accumulator + batch_membrane_sum
+                        ),
+                    ]
         with m.Elif(pending_groups):
-            m.d.sync += [pending_groups.eq(0), pending_spikes.eq(1)]
+            m.d.sync += pending_groups.eq(0)
+            if self.neuron_count == 1024:
+                m.d.sync += pending_supergroups.eq(1)
+            else:
+                m.d.sync += pending_spikes.eq(1)
             for group_spike_count, next_group_spike_count in zip(
                 group_spike_counts, next_group_spike_counts
             ):
@@ -1019,6 +1116,18 @@ class MemoryBatchedLIFBank(wiring.Component):
                 group_membrane_sums, next_group_membrane_sums
             ):
                 m.d.sync += group_membrane_sum.eq(next_group_membrane_sum)
+        with m.Elif(pending_supergroups):
+            m.d.sync += [pending_supergroups.eq(0), pending_spikes.eq(1)]
+            for supergroup_spike_count, next_supergroup_spike_count in zip(
+                supergroup_spike_counts, next_supergroup_spike_counts
+            ):
+                m.d.sync += supergroup_spike_count.eq(next_supergroup_spike_count)
+            for supergroup_membrane_sum, next_supergroup_membrane_sum in zip(
+                supergroup_membrane_sums, next_supergroup_membrane_sums
+            ):
+                m.d.sync += supergroup_membrane_sum.eq(
+                    next_supergroup_membrane_sum
+                )
         with m.Elif(pending_spikes):
             m.d.sync += [
                 pending_spikes.eq(0),
@@ -1057,6 +1166,8 @@ class MemoryBatchedLIFBank(wiring.Component):
                 m.d.sync += [
                     pending_read.eq(1),
                     batch_index.eq(0),
+                    sample_spike_accumulator.eq(0),
+                    sample_membrane_accumulator.eq(0),
                     input_drive.eq(next_input_drive),
                     recurrent_drive.eq(next_recurrent_drive),
                     self.leak_mode.eq(next_leak_mode),

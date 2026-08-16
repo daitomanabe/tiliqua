@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: CERN-OHL-S-2.0
 
-"""Frame-buffer-free 8x8 through 64x8 neural activity visualizer."""
+"""Frame-buffer-free 8x8 through 64x16 neural activity visualizer."""
 
 from amaranth import Cat, Elaboratable, Module, Mux, Signal
 
@@ -10,18 +10,32 @@ from amaranth import Cat, Elaboratable, Module, Mux, Signal
 class SNNVisualizer(Elaboratable):
     """Draw one cell per neuron from synchronized spike/membrane snapshots."""
 
-    def __init__(self, *, neuron_count=64):
-        if neuron_count not in (64, 128, 256, 512):
-            raise ValueError("visualizer supports 64, 128, 256, or 512 neurons")
+    def __init__(
+        self, *, neuron_count=64, membrane_level_bits=4, external_rows=False
+    ):
+        if neuron_count not in (64, 128, 256, 512, 1024):
+            raise ValueError(
+                "visualizer supports 64, 128, 256, 512, or 1024 neurons"
+            )
         self.neuron_count = neuron_count
-        self.x_cell_shift = {64: 6, 128: 5, 256: 4, 512: 3}[neuron_count]
+        if membrane_level_bits not in (2, 4):
+            raise ValueError("membrane_level_bits must be 2 or 4")
+        self.membrane_level_bits = membrane_level_bits
+        self.external_rows = external_rows
+        self.x_cell_shift = {64: 6, 128: 5, 256: 4, 512: 3, 1024: 3}[
+            neuron_count
+        ]
+        self.y_cell_shift = 5 if neuron_count == 1024 else 6
         self.x = Signal(12)
         self.y = Signal(12)
         self.spikes = Signal(neuron_count)
-        self.membrane_levels = Signal(neuron_count * 4)
+        self.membrane_levels = Signal(neuron_count * membrane_level_bits)
         self.activity = Signal((neuron_count + 1).bit_length())
         self.burst = Signal()
         self.frame = Signal(8)
+        self.neuron_index = Signal(range(neuron_count))
+        self.external_row_addr = Signal(range(max(2, neuron_count // 32)))
+        self.external_row_data = Signal(32 * (1 + membrane_level_bits))
         self.r = Signal(8)
         self.g = Signal(8)
         self.b = Signal(8)
@@ -31,9 +45,8 @@ class SNNVisualizer(Elaboratable):
 
         local_x = Signal(10)
         local_y = Signal(10)
-        neuron_index = Signal(range(self.neuron_count))
         selected_spike = Signal()
-        selected_level = Signal(4)
+        selected_level = Signal(self.membrane_level_bits)
         inside_grid = Signal()
         cell_edge = Signal()
         checker = Signal()
@@ -47,21 +60,43 @@ class SNNVisualizer(Elaboratable):
             ),
             local_x.eq(self.x - 104),
             local_y.eq(self.y - 104),
-            neuron_index.eq(Cat(
+            self.neuron_index.eq(Cat(
                 local_x[self.x_cell_shift:9],
-                local_y[6:9],
+                local_y[self.y_cell_shift:9],
             )),
-            selected_spike.eq(self.spikes.bit_select(neuron_index, 1)),
-            selected_level.eq(self.membrane_levels.word_select(neuron_index, 4)),
+            self.external_row_addr.eq(self.neuron_index[5:]),
             cell_edge.eq(
                 (local_x[0:self.x_cell_shift] < 2)
                 | (local_x[0:self.x_cell_shift] >= (1 << self.x_cell_shift) - 2)
-                | (local_y[0:6] < 2) | (local_y[0:6] >= 62)
+                | (local_y[0:self.y_cell_shift] < 2)
+                | (local_y[0:self.y_cell_shift]
+                   >= (1 << self.y_cell_shift) - 2)
             ),
             checker.eq(self.x[5] ^ self.y[5] ^ self.frame[3]),
-            level_byte.eq(Cat(selected_level, selected_level)),
+            level_byte.eq(Cat(*(
+                [selected_level] * (8 // self.membrane_level_bits)
+            ))),
             activity_byte.eq(Mux(self.activity > 63, 255, self.activity << 2)),
         ]
+
+        if self.external_rows:
+            selected_display = Signal(1 + self.membrane_level_bits)
+            m.d.comb += [
+                selected_display.eq(self.external_row_data.word_select(
+                    self.neuron_index[:5], 1 + self.membrane_level_bits
+                )),
+                selected_spike.eq(selected_display[0]),
+                selected_level.eq(selected_display[1:]),
+            ]
+        else:
+            m.d.comb += [
+                selected_spike.eq(self.spikes.bit_select(
+                    self.neuron_index, 1
+                )),
+                selected_level.eq(self.membrane_levels.word_select(
+                    self.neuron_index, self.membrane_level_bits
+                )),
+            ]
 
         with m.If(~inside_grid):
             m.d.comb += [
