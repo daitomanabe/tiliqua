@@ -35,18 +35,20 @@ Tutorial 6: 64ニューロン全並列SNNで音と映像を生成する
 同時更新され、streamがbackpressureを受けた間は入力ready、出力payload、膜電位、発火状態、
 sample indexを全て停止します。
 
-3段pipeline
+4段pipeline
 -----------
 
-60 MHz sync domainで64-way処理を1 cycleに詰め込まず、次の3段へ分けます。
+60 MHz sync domainで64-way処理を1 cycleに詰め込まず、次の4段へ分けます。
 
+#. 入力振幅と3つのcontrol modeをregister
 #. 64個の膜電位候補と発火bitを同時更新してregister
-#. register済み発火bitをpopulation countへ集約し、膜電位monitorを平均化
-#. population countと平均膜電位を4系統のDAC sampleへ写像
+#. register済み発火bitをpopulation countへ集約し、膜電位monitorを集計
+#. population countと膜電位monitorを4系統のDAC sampleへ写像
 
-48 kHzでは1 sampleが約20.83 usです。3 sync cycleは50 nsなので、このpipeline latencyは
+48 kHzでは1 sampleが約20.83 usです。4 sync cycleは約66.7 nsなので、このpipeline latencyは
 音響上無視でき、timing closureには大きく効きます。OUT 3は観測用なので、内部16-bit膜電位を
-変えず、上位8-bitだけを平均して16-bit monitorへ戻します。
+変えず、各ニューロンの上位4-bitを64個加算してscaleします。平均後に下位を捨てずpopulation和を
+保持するため、monitorの小さな集合変化も残ります。
 
 出力と映像
 ----------
@@ -97,7 +99,7 @@ resource/timing contractを順に実行します。2026-08-17の最終結果は�
    * - 項目
      - 結果
    * - unit test
-     - 2 PASS（決定性、bipolar出力、全状態backpressure freeze）
+     - 3 PASS（決定性、bipolar出力、全状態freeze、3 control response）
    * - DVI
      - 4 frames / 2,534,824 active pixels / RGB各16以上のspan
    * - OUT 0 simulation
@@ -107,13 +109,13 @@ resource/timing contractを順に実行します。2026-08-17の最終結果は�
    * - OUT 2 simulation
      - 0 .. 17,998 count
    * - OUT 3 simulation
-     - 0 .. 14,284 count
+     - 0 .. 11,288 count
    * - LUT4 / FF / DSP
-     - 5,883 / 3,006 / 1
+     - 5,359 / 3,014 / 1
    * - sync Fmax
-     - 61.71 MHz（要求60.00 MHz）
+     - 68.95 MHz（要求60.00 MHz）
    * - audio / dvi / dvi5x Fmax
-     - 75.78 / 82.28 / 443.85 MHz
+     - 74.62 / 78.97 / 405.19 MHz
 
 実機自己診断
 ------------
@@ -154,7 +156,7 @@ AudioToolbox outputとAVFoundation inputのtimestampをsample-perfectとは仮�
      - +1.456 V / +3.856 V
      - PASS
    * - OUT 3 low/high activity時の平均
-     - +3.432 V / +2.661 V
+     - +2.532 V / +1.806 V
      - PASS
    * - activityとburst gateのblock相関
      - +0.99529
@@ -178,7 +180,8 @@ population countをさらにregisterしても53.58 MHzでした。その時点�
 膜電位平均からOUT 3でした。
 
 16-bit平均をregisterすると58.56 MHzまで改善し、観測専用平均を上位8-bitへ狭めて61.71 MHzで
-contractを通過しました。FPGAで「adder treeを書いた」だけではtiming closureを保証しません。
+最初のcontractを通過しました。続く4-input版では上位4-bitのpopulation和へ変え、68.95 MHzまで
+改善しました。FPGAで「adder treeを書いた」だけではtiming closureを保証しません。
 各失敗後に ``top.tim`` の実際のsource/sinkを読み、ネットワーク更新、集計、出力写像をregisterで
 分離します。
 

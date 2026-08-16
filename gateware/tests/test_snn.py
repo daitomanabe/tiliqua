@@ -11,6 +11,28 @@ from tiliqua.dsp.snn import ParallelLIFBank, SNNTestSource
 
 class ParallelLIFBankTests(unittest.TestCase):
 
+    def mean_activity(self, channel, control):
+        dut = ParallelLIFBank(neuron_count=16)
+        outputs = []
+
+        async def bench(ctx):
+            ctx.set(dut.i.valid, 1)
+            ctx.set(dut.i.payload[0].as_value(), 8_000)
+            for index in range(1, 4):
+                ctx.set(dut.i.payload[index].as_value(), 0)
+            ctx.set(dut.i.payload[channel].as_value(), control)
+            ctx.set(dut.o.ready, 1)
+            while len(outputs) < 2_048:
+                if ctx.get(dut.o.valid):
+                    outputs.append(ctx.get(dut.o.payload[1].as_value()))
+                await ctx.tick()
+
+        sim = Simulator(dut)
+        sim.add_clock(1e-6)
+        sim.add_testbench(bench)
+        sim.run()
+        return sum(outputs[512:]) / len(outputs[512:])
+
     def test_network_is_bipolar_deterministic_and_backpressure_safe(self):
         dut = ParallelLIFBank(neuron_count=16)
         outputs = []
@@ -89,6 +111,19 @@ class ParallelLIFBankTests(unittest.TestCase):
         sim.add_clock(1e-6)
         sim.add_testbench(bench)
         sim.run()
+
+    def test_three_cv_controls_change_population_activity(self):
+        weak_leak = self.mean_activity(1, -8_000)
+        strong_leak = self.mean_activity(1, 8_000)
+        self.assertGreater(weak_leak, strong_leak)
+
+        weak_recurrence = self.mean_activity(2, -8_000)
+        strong_recurrence = self.mean_activity(2, 8_000)
+        self.assertLess(weak_recurrence, strong_recurrence)
+
+        low_threshold = self.mean_activity(3, -8_000)
+        high_threshold = self.mean_activity(3, 8_000)
+        self.assertGreater(low_threshold, high_threshold)
 
 
 if __name__ == "__main__":

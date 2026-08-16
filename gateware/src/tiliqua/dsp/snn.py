@@ -61,6 +61,9 @@ class ParallelLIFBank(wiring.Component):
         self.membrane_levels = Signal(neuron_count * 4)
         self.spike_count = Signal(range(neuron_count + 1))
         self.sample_index = Signal(32)
+        self.leak_mode = Signal(2, init=1)
+        self.recurrent_mode = Signal(2, init=1)
+        self.threshold_mode = Signal(2, init=1)
 
     @staticmethod
     def threshold_for(index):
@@ -76,17 +79,42 @@ class ParallelLIFBank(wiring.Component):
         output_valid = Signal()
         output_payload = Signal(data.ArrayLayout(ASQ, 4))
         accept_input = Signal()
+        pending_update = Signal()
         pending_spikes = Signal()
         pending_output = Signal()
 
         input_sample = self.i.payload[0].as_value()
         input_magnitude = Signal(16)
+        next_input_drive = Signal(11)
         input_drive = Signal(11)
+        leak_control = self.i.payload[1].as_value()
+        recurrent_control = self.i.payload[2].as_value()
+        threshold_control = self.i.payload[3].as_value()
+        next_leak_mode = Signal(2)
+        next_recurrent_mode = Signal(2)
+        next_threshold_mode = Signal(2)
         m.d.comb += [
-            input_magnitude.eq(Mux(input_sample < 0, -input_sample, input_sample)),
-            input_drive.eq(input_magnitude >> 5),
+            input_magnitude.eq(Mux(
+                input_sample == -32768,
+                Const(32768, 16),
+                Mux(input_sample < 0, -input_sample, input_sample),
+            )),
+            next_input_drive.eq(input_magnitude >> 5),
+            next_leak_mode.eq(Mux(
+                leak_control < -1000, 0, Mux(leak_control > 1000, 2, 1)
+            )),
+            next_recurrent_mode.eq(Mux(
+                recurrent_control < -1000,
+                0,
+                Mux(recurrent_control > 1000, 2, 1),
+            )),
+            next_threshold_mode.eq(Mux(
+                threshold_control < -1000,
+                0,
+                Mux(threshold_control > 1000, 2, 1),
+            )),
             accept_input.eq(
-                ~pending_spikes & ~pending_output
+                ~pending_update & ~pending_spikes & ~pending_output
                 & (~output_valid | self.o.ready)
             ),
             self.i.ready.eq(accept_input),
@@ -99,29 +127,55 @@ class ParallelLIFBank(wiring.Component):
 
         next_spikes = []
         next_membranes = []
+        recurrent_drive = Signal(self.count_bits + 3)
+        m.d.comb += recurrent_drive.eq(Mux(
+            self.recurrent_mode == 0,
+            self.spike_count << 1,
+            Mux(
+                self.recurrent_mode == 2,
+                self.spike_count << 3,
+                self.spike_count << 2,
+            ),
+        ))
         for index, membrane in enumerate(self.membranes):
             candidate = Signal(18, name=f"candidate_{index}")
             spike = Signal(name=f"next_spike_{index}")
+            leak_amount = Signal(16, name=f"leak_amount_{index}")
             neighbor = self.spike_vector[(index - 1) % self.neuron_count]
             threshold = self.threshold_for(index)
+            dynamic_threshold = Signal(14, name=f"dynamic_threshold_{index}")
             reset_level = (index * 37 + 101) & 0x1FF
             m.d.comb += [
+                leak_amount.eq(Mux(
+                    self.leak_mode == 0,
+                    membrane >> 6,
+                    Mux(
+                        self.leak_mode == 2,
+                        membrane >> 4,
+                        membrane >> self.leak_shift,
+                    ),
+                )),
+                dynamic_threshold.eq(Mux(
+                    self.threshold_mode == 0,
+                    threshold - 800,
+                    Mux(self.threshold_mode == 2, threshold + 800, threshold),
+                )),
                 candidate.eq(
                     membrane
-                    - (membrane >> self.leak_shift)
+                    - leak_amount
                     + self.bias_for(index)
                     + input_drive
-                    + (self.spike_count << 2)
+                    + recurrent_drive
                     + Mux(neighbor, 256, 0)
                 ),
-                spike.eq(candidate >= threshold),
+                spike.eq(candidate >= dynamic_threshold),
             ]
             next_spikes.append(spike)
             next_membranes.append(Mux(spike, reset_level, candidate[:16]))
 
         next_spike_vector = Cat(*next_spikes)
         registered_spike_count = Signal(range(self.neuron_count + 1))
-        membrane_sum = Signal(8 + self.count_bits)
+        membrane_sum = Signal(4 + self.count_bits)
         next_membrane_mean = Signal(16)
         membrane_mean = Signal(16)
         membrane_scaled = Signal(17)
@@ -132,14 +186,14 @@ class ParallelLIFBank(wiring.Component):
             registered_spike_count.eq(balanced_sum([
                 self.spike_vector[index] for index in range(self.neuron_count)
             ])),
-            # The fourth DAC channel is a monitor, so average the upper eight
-            # bits. The neuron state itself remains 16-bit; narrowing only
-            # this reduction tree keeps the 64-way monitor path at 60 MHz.
+            # The fourth DAC channel is a monitor, so sum the upper four bits
+            # and scale the population total. The neuron state itself remains
+            # 16-bit; narrowing only this reduction tree protects timing.
             membrane_sum.eq(balanced_sum([
-                membrane[8:16] for membrane in self.membranes
+                membrane[12:16] for membrane in self.membranes
             ])),
             next_membrane_mean.eq(
-                (membrane_sum >> (self.neuron_count.bit_length() - 1)) << 8
+                membrane_sum << (12 - (self.neuron_count.bit_length() - 1))
             ),
             membrane_scaled.eq(membrane_mean << 1),
             activity_scaled.eq(self.spike_count << 9),
@@ -151,12 +205,20 @@ class ParallelLIFBank(wiring.Component):
             )),
         ]
 
-        # Stage 1 updates all neurons and registers one spike bit per neuron.
-        # Stage 2 reduces those registered bits into a population count. Stage
-        # 3 maps the registered count to DAC channels. Three 60 MHz cycles are
-        # still negligible inside one 48 kHz audio period and break both long
-        # candidate->population and population->saturation timing paths.
-        with m.If(pending_spikes):
+        # Stage 0 registers input drive and CV modes, stage 1 updates all
+        # neurons, stage 2 reduces the registered spike bits, and stage 3 maps
+        # population state to DAC channels. Four 60 MHz cycles are negligible
+        # inside one 48 kHz audio period and isolate the calibrated input path.
+        with m.If(pending_update):
+            m.d.sync += [
+                pending_update.eq(0),
+                pending_spikes.eq(1),
+                self.spike_vector.eq(next_spike_vector),
+                self.sample_index.eq(self.sample_index + 1),
+            ]
+            for membrane, next_membrane in zip(self.membranes, next_membranes):
+                m.d.sync += membrane.eq(next_membrane)
+        with m.Elif(pending_spikes):
             m.d.sync += [
                 pending_spikes.eq(0),
                 pending_output.eq(1),
@@ -192,12 +254,12 @@ class ParallelLIFBank(wiring.Component):
             m.d.sync += output_valid.eq(0)
             with m.If(self.i.valid):
                 m.d.sync += [
-                    pending_spikes.eq(1),
-                    self.spike_vector.eq(next_spike_vector),
-                    self.sample_index.eq(self.sample_index + 1),
+                    pending_update.eq(1),
+                    input_drive.eq(next_input_drive),
+                    self.leak_mode.eq(next_leak_mode),
+                    self.recurrent_mode.eq(next_recurrent_mode),
+                    self.threshold_mode.eq(next_threshold_mode),
                 ]
-                for membrane, next_membrane in zip(self.membranes, next_membranes):
-                    m.d.sync += membrane.eq(next_membrane)
 
         return m
 
@@ -217,7 +279,7 @@ class SNNTestSource(wiring.Component):
             drive.eq(Mux(sample_index[11], 12_000, 3_000)),
             self.o.valid.eq(1),
             self.o.payload[0].as_value().eq(drive),
-            self.o.payload[1].as_value().eq(Mux(sample_index[12], 8_000, -8_000)),
+            self.o.payload[1].as_value().eq(0),
             self.o.payload[2].as_value().eq(0),
             self.o.payload[3].as_value().eq(0),
             self.sample_index.eq(sample_index),

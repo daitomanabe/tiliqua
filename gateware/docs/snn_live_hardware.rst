@@ -22,10 +22,10 @@ live profileを合成する
 
     pdm snn_lab --with-build check
 
-2026-08-17のlive profileはLUT4 6,339、FF 3,034、DSP 1でした。Fmaxはsync 60.86 MHz、
-audio 65.17 MHz、dvi 77.78 MHz、dvi5x 467.95 MHzで、全clockがcontractを通過しました。
+4-input control追加後のlive profileはLUT4 7,334、FF 3,128、DSP 1でした。Fmaxはsync 64.21 MHz、
+audio 66.25 MHz、dvi 77.97 MHz、dvi5x 377.36 MHzで、全clockがcontractを通過しました。
 bitstream SHA-256は
-``663ff80cc9f19171d14758bb4c500aa0b57895aeb4f7138ae7f04408184f17b3`` です。
+``077686c34bf2a47de8b22614907237c0f464c5d281d3c3d69d7d1cb8faa99cce`` です。
 
 bounded bipolar stimulus
 ------------------------
@@ -85,35 +85,35 @@ baselineより0.25 V高い状態が0.5秒以上続くrunを抽出し、時系列
      - 0.757 V
      - -0.071 V
      - 0.603 V
-     - 3.763 V
+     - 2.857 V
    * - +1.0 V
      - 1.148 V
      - +0.006 V
      - 1.671 V
-     - 3.302 V
+     - 2.401 V
    * - +2.0 V
      - 1.511 V
      - +0.145 V
      - 3.453 V
-     - 2.740 V
+     - 1.880 V
    * - -0.5 V
      - 0.876 V
      - -0.049 V
      - 0.901 V
-     - 3.643 V
+     - 2.788 V
    * - -1.0 V
      - 1.253 V
      - +0.035 V
      - 2.066 V
-     - 3.057 V
+     - 2.174 V
    * - -2.0 V
      - 1.554 V
      - +0.163 V
      - 3.635 V
-     - 2.708 V
+     - 1.848 V
 
-zero-drive baselineはactivity -0.112 V、burst +0.193 V、membrane +3.637 V、spike RMS
-0.525 Vです。6 runを全て検出し、正負それぞれの単調性がPASSしました。
+zero-drive baselineはactivity -0.112 V、burst +0.191 V、membrane +2.669 V、spike RMS
+0.526 Vです。6 runを全て検出し、正負それぞれの単調性がPASSしました。
 
 ``abs(input)`` を検査する
 ----------------------------------------
@@ -123,7 +123,7 @@ network driveはRTLで入力の絶対値を取ります。ただし物理 ``+x V
 正負差が相対的に大きくなります。
 
 offsetの影響が小さい ``+-2 V`` で対称性を確認します。実測差はactivity 0.019 V、burst
-0.181 V、membrane 0.032 V、spike RMS 0.043 Vで、全てlimit内でした。低振幅差をRTLの
+0.164 V、membrane 0.032 V、spike RMS 0.014 Vで、全てlimit内でした。低振幅差をRTLの
 非対称と誤診せず、必要なら物理ADC zeroを別に測定してから補正します。
 
 このテストが証明する範囲
@@ -139,5 +139,5 @@ PASSは次を証明します。
 * live profileのR5 timing/resource closure
 
 連続周波数依存、温度drift、入力3系統の使用、学習、PSRAM結合行列、物理DVI captureは未検査です。
-次はIN 1..3をleak、recurrent gain、threshold modulationへ割り当て、パラメータ空間を安全な範囲で
-自動scanします。
+IN 1..3をleak、recurrent gain、threshold modulationへ割り当てた自動scanも完了しました。
+続きは :doc:`snn_control_hardware` です。
