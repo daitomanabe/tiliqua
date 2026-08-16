@@ -28,6 +28,9 @@ FRONTIER_CONTRACT = ROOT / "snn" / "snn_256_frontier_contract.json"
 BATCHED_SYNTHESIS_CONTRACT = (
     ROOT / "snn" / "snn_256x32_synthesis_contract.json"
 )
+MEMORY_SYNTHESIS_CONTRACT = (
+    ROOT / "snn" / "snn_512x32_memory_synthesis_contract.json"
+)
 
 
 def run(command: list[str]) -> None:
@@ -46,6 +49,7 @@ def doctor(_: argparse.Namespace) -> None:
         SCALE_SYNTHESIS_CONTRACT,
         FRONTIER_CONTRACT,
         BATCHED_SYNTHESIS_CONTRACT,
+        MEMORY_SYNTHESIS_CONTRACT,
     ]
     missing = [str(path.relative_to(ROOT)) for path in required if not path.is_file()]
     if missing:
@@ -53,8 +57,9 @@ def doctor(_: argparse.Namespace) -> None:
     if shutil.which("verilator") is None:
         raise SystemExit("Verilator is required")
     print("SNN lab doctor: PASS")
-    print("  neurons            64 fully parallel")
-    print("  neuron step rate    3.072 M updates/s at 48 kHz")
+    print("  base               64 fully parallel / 3.072 M updates/s")
+    print("  batched            256 logical / 32 lanes / 12.288 M updates/s")
+    print("  memory             512 logical / 32 lanes / 24.576 M updates/s")
 
 
 def quick(_: argparse.Namespace) -> None:
@@ -321,6 +326,47 @@ def batch(args: argparse.Namespace) -> None:
         )
 
 
+def memory_report(args: argparse.Namespace) -> None:
+    """Enforce the 512x32 block-memory self-test bitstream contract."""
+
+    print("\n512-logical / 32-lane block-memory lab profile")
+    evaluate_bitstream(
+        ROOT / "build" / f"snn-av-512x32-mem-lab-{args.hw}",
+        MEMORY_SYNTHESIS_CONTRACT,
+    )
+
+
+def memory(args: argparse.Namespace) -> None:
+    """Run 512x32 equivalence, AV simulation, and self-test build gates."""
+
+    quick(args)
+    METRICS.unlink(missing_ok=True)
+    run([
+        sys.executable,
+        "src/top/snn_av/top.py",
+        "sim",
+        "--hw", args.hw,
+        "--modeline", args.modeline,
+        "--self-test",
+        "--neurons", "512",
+        "--physical-lanes", "32",
+        "--name", "SNN-AV-512X32-MEM-LAB",
+    ])
+    report(args)
+    run([
+        sys.executable,
+        "src/top/snn_av/top.py",
+        "build",
+        "--hw", args.hw,
+        "--modeline", args.modeline,
+        "--self-test",
+        "--neurons", "512",
+        "--physical-lanes", "32",
+        "--name", "SNN-AV-512X32-MEM-LAB",
+    ])
+    memory_report(args)
+
+
 def make_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--hw", default="r5")
@@ -336,6 +382,7 @@ def make_parser() -> argparse.ArgumentParser:
         "doctor", "quick", "sim", "report", "build", "check", "scale",
         "frontier", "frontier-report",
         "batch", "batch-report",
+        "memory", "memory-report",
     ):
         subparsers.add_parser(name)
     return parser
@@ -355,6 +402,8 @@ def main() -> None:
         "frontier-report": frontier_report,
         "batch": batch,
         "batch-report": batch_report,
+        "memory": memory,
+        "memory-report": memory_report,
     }
     commands[args.command](args)
 

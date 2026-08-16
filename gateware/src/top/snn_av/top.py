@@ -12,7 +12,12 @@ from tiliqua.build import sim
 from tiliqua.build.cli import top_level_cli
 from tiliqua.build.types import BitstreamHelp
 from tiliqua.dsp import ASQ
-from tiliqua.dsp.snn import BatchedLIFBank, ParallelLIFBank, SNNTestSource
+from tiliqua.dsp.snn import (
+    BatchedLIFBank,
+    MemoryBatchedLIFBank,
+    ParallelLIFBank,
+    SNNTestSource,
+)
 from tiliqua.dsp.stream_util import SyncFIFOBuffered
 from tiliqua.periph import eurorack_pmod
 from tiliqua.platform import RebootProvider
@@ -38,20 +43,29 @@ class SNNAVTop(Elaboratable):
     ):
         if clock_settings.modeline is None:
             raise ValueError("snn_av requires a fixed video mode")
-        if neuron_count not in (64, 128, 256):
-            raise ValueError("snn_av supports 64, 128, or 256 neurons")
+        if neuron_count not in (64, 128, 256, 512):
+            raise ValueError("snn_av supports 64, 128, 256, or 512 neurons")
         if physical_lane_count is not None and (
-            neuron_count != 256 or physical_lane_count not in (32, 64, 128)
+            (neuron_count == 256 and physical_lane_count not in (32, 64, 128))
+            or (neuron_count == 512 and physical_lane_count != 32)
+            or neuron_count not in (256, 512)
         ):
             raise ValueError(
-                "batched snn_av supports 256 neurons with 32, 64, or 128 lanes"
+                "batched snn_av supports 256x(32,64,128) or memory-backed 512x32"
             )
         self.clock_settings = clock_settings
         self.self_test = self_test
         self.neuron_count = neuron_count
         self.physical_lane_count = physical_lane_count or neuron_count
         self.pmod0 = eurorack_pmod.EurorackPmod(clock_settings.audio_clock)
-        if physical_lane_count is None:
+        if neuron_count == 512:
+            if physical_lane_count != 32:
+                raise ValueError("512-neuron snn_av requires 32 physical lanes")
+            self.core = MemoryBatchedLIFBank(
+                logical_neuron_count=neuron_count,
+                physical_lane_count=physical_lane_count,
+            )
+        elif physical_lane_count is None:
             self.core = ParallelLIFBank(neuron_count=neuron_count)
         else:
             self.core = BatchedLIFBank(
@@ -141,23 +155,6 @@ class SNNAVTop(Elaboratable):
             m.d.comb += self.test_sample_index.eq(core.sample_index)
         wiring.connect(m, core.o, pmod0.i_cal)
 
-        video_spikes = Signal(self.neuron_count)
-        video_membranes = Signal(self.neuron_count * 4)
-        video_activity = Signal(core.count_bits)
-        video_burst = Signal()
-        m.submodules.spike_cdc = FFSynchronizer(
-            core.spike_vector, video_spikes, o_domain="dvi"
-        )
-        m.submodules.membrane_cdc = FFSynchronizer(
-            core.membrane_levels, video_membranes, o_domain="dvi"
-        )
-        m.submodules.activity_cdc = FFSynchronizer(
-            core.spike_count, video_activity, o_domain="dvi"
-        )
-        m.submodules.burst_cdc = FFSynchronizer(
-            core.spike_count >= 2, video_burst, o_domain="dvi"
-        )
-
         for member in dvi_tgen.timings.signature.members:
             m.d.comb += getattr(dvi_tgen.timings, member).eq(
                 getattr(self.clock_settings.modeline, member)
@@ -170,14 +167,63 @@ class SNNAVTop(Elaboratable):
         frame_activity = Signal(core.count_bits)
         frame_burst = Signal()
         m.d.dvi += previous_vsync.eq(dvi_tgen.ctrl.vsync)
-        with m.If(dvi_tgen.ctrl.vsync & ~previous_vsync):
-            m.d.dvi += [
-                frame.eq(frame + 1),
-                frame_spikes.eq(video_spikes),
-                frame_membranes.eq(video_membranes),
-                frame_activity.eq(video_activity),
-                frame_burst.eq(video_burst),
-            ]
+
+        if self.neuron_count == 512:
+            # The SNN state is stable for almost the complete 48 kHz sample.
+            # Toggle synchronization therefore supplies a bundled-data CDC:
+            # after two DVI cycles the multi-bit payload has already been
+            # stable for multiple source/destination cycles. Capture only the
+            # first new sample after vsync so one frame never tears, while
+            # avoiding two synchronizer FFs for every one of 2,560 data bits.
+            previous_sample_index = Signal.like(core.sample_index)
+            snapshot_toggle = Signal()
+            m.d.sync += previous_sample_index.eq(core.sample_index)
+            with m.If(core.sample_index != previous_sample_index):
+                m.d.sync += snapshot_toggle.eq(~snapshot_toggle)
+
+            video_snapshot_toggle = Signal()
+            m.submodules.snapshot_toggle_cdc = FFSynchronizer(
+                snapshot_toggle, video_snapshot_toggle, o_domain="dvi"
+            )
+            observed_snapshot_toggle = Signal()
+            capture_armed = Signal(init=1)
+            with m.If(dvi_tgen.ctrl.vsync & ~previous_vsync):
+                m.d.dvi += [frame.eq(frame + 1), capture_armed.eq(1)]
+            with m.Elif(video_snapshot_toggle != observed_snapshot_toggle):
+                m.d.dvi += observed_snapshot_toggle.eq(video_snapshot_toggle)
+                with m.If(capture_armed):
+                    m.d.dvi += [
+                        capture_armed.eq(0),
+                        frame_spikes.eq(core.spike_vector),
+                        frame_membranes.eq(core.membrane_levels),
+                        frame_activity.eq(core.spike_count),
+                        frame_burst.eq(core.spike_count >= 2),
+                    ]
+        else:
+            video_spikes = Signal(self.neuron_count)
+            video_membranes = Signal(self.neuron_count * 4)
+            video_activity = Signal(core.count_bits)
+            video_burst = Signal()
+            m.submodules.spike_cdc = FFSynchronizer(
+                core.spike_vector, video_spikes, o_domain="dvi"
+            )
+            m.submodules.membrane_cdc = FFSynchronizer(
+                core.membrane_levels, video_membranes, o_domain="dvi"
+            )
+            m.submodules.activity_cdc = FFSynchronizer(
+                core.spike_count, video_activity, o_domain="dvi"
+            )
+            m.submodules.burst_cdc = FFSynchronizer(
+                core.spike_count >= 2, video_burst, o_domain="dvi"
+            )
+            with m.If(dvi_tgen.ctrl.vsync & ~previous_vsync):
+                m.d.dvi += [
+                    frame.eq(frame + 1),
+                    frame_spikes.eq(video_spikes),
+                    frame_membranes.eq(video_membranes),
+                    frame_activity.eq(video_activity),
+                    frame_burst.eq(video_burst),
+                ]
 
         m.d.comb += [
             visualizer.x.eq(dvi_tgen.x),
@@ -234,17 +280,21 @@ def simulation_ports(fragment):
 
 def argparse_callback(parser):
     parser.add_argument("--self-test", action="store_true")
-    parser.add_argument("--neurons", type=int, choices=(64, 128, 256), default=64)
+    parser.add_argument(
+        "--neurons", type=int, choices=(64, 128, 256, 512), default=64
+    )
     parser.add_argument("--physical-lanes", type=int, choices=(32, 64, 128))
 
 
 def argparse_fragment(args):
     if args.name == "SNN-AV":
         if args.physical_lanes is not None:
+            memory_suffix = "-MEM" if args.neurons == 512 else ""
             args.name = (
-                f"SNN-AV-{args.neurons}X{args.physical_lanes}-LAB"
+                f"SNN-AV-{args.neurons}X{args.physical_lanes}"
+                f"{memory_suffix}-LAB"
                 if args.self_test
-                else f"SNN-AV-{args.neurons}X{args.physical_lanes}"
+                else f"SNN-AV-{args.neurons}X{args.physical_lanes}{memory_suffix}"
             )
         elif args.self_test:
             args.name = (

@@ -7,7 +7,12 @@ import unittest
 from amaranth.sim import Simulator
 
 from tiliqua.build.qor import parse_nextpnr_utilization
-from tiliqua.dsp.snn import BatchedLIFBank, ParallelLIFBank, SNNTestSource
+from tiliqua.dsp.snn import (
+    BatchedLIFBank,
+    MemoryBatchedLIFBank,
+    ParallelLIFBank,
+    SNNTestSource,
+)
 
 
 class ParallelLIFBankTests(unittest.TestCase):
@@ -207,6 +212,19 @@ class ParallelLIFBankTests(unittest.TestCase):
                     sample_count=32,
                 )
                 self.assertEqual(actual, expected)
+
+    def test_512_memory_batches_match_fully_parallel_model(self):
+        expected = self.capture_network(
+            ParallelLIFBank(neuron_count=512), sample_count=16
+        )
+        actual = self.capture_network(
+            MemoryBatchedLIFBank(
+                logical_neuron_count=512,
+                physical_lane_count=32,
+            ),
+            sample_count=16,
+        )
+        self.assertEqual(actual, expected)
 
     def test_three_cv_controls_change_population_activity(self):
         weak_leak = self.mean_activity(1, -8_000)
