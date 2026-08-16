@@ -73,6 +73,57 @@ class SNNVisualizerTests(unittest.TestCase):
         sim.add_testbench(bench)
         sim.run()
 
+    def test_1024_external_display_row_preserves_ei_semantics(self):
+        dut = SNNVisualizer(
+            neuron_count=1024,
+            membrane_level_bits=2,
+            external_rows=True,
+            inhibitory_stride=4,
+        )
+
+        async def bench(ctx):
+            ctx.set(dut.y, 108)
+            ctx.set(dut.spikes, 0)
+            ctx.set(dut.membrane_levels, 0)
+            ctx.set(dut.activity, 0)
+            ctx.set(dut.burst, 0)
+            ctx.set(dut.frame, 0)
+
+            # Neurons 34/35 occupy words 2/3 of external display RAM row 1.
+            row = (2 << 1) << (2 * 3)
+            ctx.set(dut.external_row_data, row)
+            ctx.set(dut.x, 380)
+            await ctx.delay(1e-9)
+            self.assertEqual(ctx.get(dut.neuron_index), 34)
+            self.assertEqual(ctx.get(dut.external_row_addr), 1)
+            self.assertEqual(
+                (ctx.get(dut.r), ctx.get(dut.g), ctx.get(dut.b)),
+                (170, 42, 85),
+            )
+
+            row = (2 << 1) << (3 * 3)
+            ctx.set(dut.external_row_data, row)
+            ctx.set(dut.x, 388)
+            await ctx.delay(1e-9)
+            self.assertEqual(ctx.get(dut.neuron_index), 35)
+            self.assertEqual(ctx.get(dut.external_row_addr), 1)
+            self.assertEqual(
+                (ctx.get(dut.r), ctx.get(dut.g), ctx.get(dut.b)),
+                (181, 42, 32),
+            )
+
+            row = 1 << (3 * 3)
+            ctx.set(dut.external_row_data, row)
+            await ctx.delay(1e-9)
+            self.assertEqual(
+                (ctx.get(dut.r), ctx.get(dut.g), ctx.get(dut.b)),
+                (255, 96, 32),
+            )
+
+        sim = Simulator(dut)
+        sim.add_testbench(bench)
+        sim.run()
+
 
 class ParallelLIFBankTests(unittest.TestCase):
 

@@ -36,7 +36,8 @@ DVI frame checksumが変わるだけでは、E/Iの色を取り違えていな�
 直接sampleし、興奮性neuron 2のlevel 2を ``RGB(170, 42, 85)``、抑制性neuron 3を
 ``RGB(181, 42, 32)`` と検査します。さらに同じ2 cellのspike時が白 ``RGB(255, 255, 255)`` と橙
 ``RGB(255, 96, 32)`` になることを画素単位でassertします。これにより、画面全体の変化とpopulationの意味論を別々に
-回帰できます。
+回帰できます。実際の1024 topが使うexternal display RAM経路も別testで検査し、neuron 34/35がrow 1のword 2/3を選び、
+同じ興奮性/抑制性の色を保つことを確認します。
 
 R5 synthesisとtiming修正
 -------------------------
