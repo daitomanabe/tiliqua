@@ -39,13 +39,14 @@ class ParallelLIFBank(wiring.Component):
     rhythms without multipliers or RAM arbitration.
     """
 
-    def __init__(self, *, neuron_count=64, leak_shift=5):
+    def __init__(self, *, neuron_count=64, leak_shift=5, ei_ring=False):
         if neuron_count < 8 or neuron_count > 1024 or neuron_count & (neuron_count - 1):
             raise ValueError("neuron_count must be a power of two in the range 8..1024")
         if not 2 <= leak_shift <= 8:
             raise ValueError("leak_shift must be in the range 2..8")
         self.neuron_count = neuron_count
         self.leak_shift = leak_shift
+        self.ei_ring = ei_ring
         self.count_bits = (neuron_count + 1).bit_length()
         super().__init__({
             "i": In(stream.Signature(data.ArrayLayout(ASQ, 4))),
@@ -159,6 +160,7 @@ class ParallelLIFBank(wiring.Component):
             ),
         ))
         for index, membrane in enumerate(self.membranes):
+            candidate_base = Signal(18, name=f"candidate_base_{index}")
             candidate = Signal(18, name=f"candidate_{index}")
             spike = Signal(name=f"next_spike_{index}")
             leak_amount = Signal(12, name=f"leak_amount_{index}")
@@ -176,16 +178,25 @@ class ParallelLIFBank(wiring.Component):
                         membrane >> self.leak_shift,
                     ),
                 )),
-                candidate.eq(
+                candidate_base.eq(
                     membrane
                     - leak_amount
                     + self.bias_for(index)
                     + input_drive
                     + recurrent_drive
-                    + Mux(neighbor, 256, 0)
                 ),
                 spike.eq(candidate >= dynamic_threshold),
             ]
+            if self.ei_ring and index % 4 == 0:
+                m.d.comb += candidate.eq(Mux(
+                    neighbor,
+                    Mux(candidate_base >= 1024, candidate_base - 1024, 0),
+                    candidate_base,
+                ))
+            else:
+                m.d.comb += candidate.eq(
+                    candidate_base + Mux(neighbor, 256, 0)
+                )
             leak_amounts.append(leak_amount)
             next_leak_amounts.append(next_leak_amount)
             next_spikes.append(spike)
@@ -693,7 +704,8 @@ class MemoryBatchedLIFBank(wiring.Component):
     """
 
     def __init__(
-        self, *, logical_neuron_count=512, physical_lane_count=32, leak_shift=5
+        self, *, logical_neuron_count=512, physical_lane_count=32, leak_shift=5,
+        ei_ring=False,
     ):
         if logical_neuron_count not in (512, 1024) or physical_lane_count != 32:
             raise ValueError(
@@ -707,6 +719,7 @@ class MemoryBatchedLIFBank(wiring.Component):
         self.leak_shift = leak_shift
         self.count_bits = (logical_neuron_count + 1).bit_length()
         self.membrane_level_bits = 2 if logical_neuron_count == 1024 else 4
+        self.ei_ring = ei_ring
         super().__init__({
             "i": In(stream.Signature(data.ArrayLayout(ASQ, 4))),
             "o": Out(stream.Signature(data.ArrayLayout(ASQ, 4))),
@@ -754,6 +767,7 @@ class MemoryBatchedLIFBank(wiring.Component):
         pending_capture = Signal()
         pending_candidate = Signal()
         pending_update = Signal()
+        pending_accumulate = Signal()
         batch_index = Signal(range(self.batch_count))
         pending_groups = Signal()
         pending_supergroups = Signal()
@@ -792,7 +806,7 @@ class MemoryBatchedLIFBank(wiring.Component):
             )),
             accept_input.eq(
                 ~pending_read & ~pending_capture & ~pending_candidate
-                & ~pending_update & ~pending_groups
+                & ~pending_update & ~pending_accumulate & ~pending_groups
                 & ~pending_supergroups
                 & ~pending_spikes & ~pending_output
                 & (~output_valid | self.o.ready)
@@ -881,6 +895,7 @@ class MemoryBatchedLIFBank(wiring.Component):
         for lane in range(self.physical_lane_count):
             membrane = selected_membranes[lane]
             leak_amount = Signal(12, name=f"lane_leak_{lane}")
+            candidate_base = Signal(18, name=f"candidate_base_lane_{lane}")
             computed_candidate = Signal(
                 18, name=f"computed_candidate_lane_{lane}"
             )
@@ -899,16 +914,25 @@ class MemoryBatchedLIFBank(wiring.Component):
                         membrane >> self.leak_shift,
                     ),
                 )),
-                computed_candidate.eq(
+                candidate_base.eq(
                     membrane
                     - leak_amount
                     + ParallelLIFBank.bias_for(lane)
                     + input_drive
                     + recurrent_drive
-                    + Mux(neighbor, 256, 0)
                 ),
                 spike.eq(candidate >= dynamic_thresholds[lane % 16]),
             ]
+            if self.ei_ring and lane % 4 == 0:
+                m.d.comb += computed_candidate.eq(Mux(
+                    neighbor,
+                    Mux(candidate_base >= 1024, candidate_base - 1024, 0),
+                    candidate_base,
+                ))
+            else:
+                m.d.comb += computed_candidate.eq(
+                    candidate_base + Mux(neighbor, 256, 0)
+                )
             lane_candidates.append((candidate, computed_candidate))
             next_lane_spikes.append(spike)
             next_lane_membranes.append(
@@ -944,6 +968,9 @@ class MemoryBatchedLIFBank(wiring.Component):
         batch_membrane_sum = Signal(range(self.physical_lane_count * 15 + 1))
         sample_spike_accumulator = Signal(range(self.neuron_count + 1))
         sample_membrane_accumulator = Signal(range(self.neuron_count * 15 + 1))
+        registered_batch_spike_count = Signal.like(batch_spike_count)
+        registered_batch_membrane_sum = Signal.like(batch_membrane_sum)
+        accumulated_final_batch = Signal()
         m.d.comb += [
             batch_spike_count.eq(balanced_sum(next_lane_spikes)),
             batch_membrane_sum.eq(balanced_sum([
@@ -1074,7 +1101,14 @@ class MemoryBatchedLIFBank(wiring.Component):
                     self.spike_vector.eq(Cat(*final_spike_parts)),
                     self.sample_index.eq(self.sample_index + 1),
                 ]
-                if self.neuron_count == 1024:
+                if self.neuron_count == 1024 and self.ei_ring:
+                    m.d.sync += [
+                        pending_accumulate.eq(1),
+                        accumulated_final_batch.eq(1),
+                        registered_batch_spike_count.eq(batch_spike_count),
+                        registered_batch_membrane_sum.eq(batch_membrane_sum),
+                    ]
+                elif self.neuron_count == 1024:
                     m.d.sync += [
                         pending_output.eq(1),
                         self.spike_count.eq(
@@ -1093,7 +1127,15 @@ class MemoryBatchedLIFBank(wiring.Component):
                     pending_read.eq(1),
                     batch_index.eq(batch_index + 1),
                 ]
-                if self.neuron_count == 1024:
+                if self.neuron_count == 1024 and self.ei_ring:
+                    m.d.sync += [
+                        pending_read.eq(0),
+                        pending_accumulate.eq(1),
+                        accumulated_final_batch.eq(0),
+                        registered_batch_spike_count.eq(batch_spike_count),
+                        registered_batch_membrane_sum.eq(batch_membrane_sum),
+                    ]
+                elif self.neuron_count == 1024:
                     m.d.sync += [
                         sample_spike_accumulator.eq(
                             sample_spike_accumulator + batch_spike_count
@@ -1102,6 +1144,32 @@ class MemoryBatchedLIFBank(wiring.Component):
                             sample_membrane_accumulator + batch_membrane_sum
                         ),
                     ]
+        with m.Elif(pending_accumulate):
+            m.d.sync += pending_accumulate.eq(0)
+            with m.If(accumulated_final_batch):
+                m.d.sync += [
+                    pending_output.eq(1),
+                    self.spike_count.eq(
+                        sample_spike_accumulator + registered_batch_spike_count
+                    ),
+                    membrane_mean.eq(
+                        (
+                            sample_membrane_accumulator
+                            + registered_batch_membrane_sum
+                        ) << 2
+                    ),
+                ]
+            with m.Else():
+                m.d.sync += [
+                    pending_read.eq(1),
+                    sample_spike_accumulator.eq(
+                        sample_spike_accumulator + registered_batch_spike_count
+                    ),
+                    sample_membrane_accumulator.eq(
+                        sample_membrane_accumulator
+                        + registered_batch_membrane_sum
+                    ),
+                ]
         with m.Elif(pending_groups):
             m.d.sync += pending_groups.eq(0)
             if self.neuron_count == 1024:

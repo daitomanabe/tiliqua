@@ -40,6 +40,12 @@ KILONEURON_SYNTHESIS_CONTRACT = (
 KILONEURON_LIVE_SYNTHESIS_CONTRACT = (
     ROOT / "snn" / "snn_1024x32_memory_live_synthesis_contract.json"
 )
+EI_RING_SYNTHESIS_CONTRACT = (
+    ROOT / "snn" / "snn_1024x32_ei_ring_synthesis_contract.json"
+)
+EI_RING_LIVE_SYNTHESIS_CONTRACT = (
+    ROOT / "snn" / "snn_1024x32_ei_ring_live_synthesis_contract.json"
+)
 
 
 def run(command: list[str]) -> None:
@@ -62,6 +68,8 @@ def doctor(_: argparse.Namespace) -> None:
         MEMORY_LIVE_SYNTHESIS_CONTRACT,
         KILONEURON_SYNTHESIS_CONTRACT,
         KILONEURON_LIVE_SYNTHESIS_CONTRACT,
+        EI_RING_SYNTHESIS_CONTRACT,
+        EI_RING_LIVE_SYNTHESIS_CONTRACT,
     ]
     missing = [str(path.relative_to(ROOT)) for path in required if not path.is_file()]
     if missing:
@@ -73,6 +81,7 @@ def doctor(_: argparse.Namespace) -> None:
     print("  batched            256 logical / 32 lanes / 12.288 M updates/s")
     print("  memory             512 logical / 32 lanes / 24.576 M updates/s")
     print("  kiloneuron         1024 logical / 32 lanes / 49.152 M updates/s")
+    print("  ei-ring            1024 logical / 32 lanes / 3:1 E/I ring")
 
 
 def quick(_: argparse.Namespace) -> None:
@@ -444,6 +453,57 @@ def kiloneuron(args: argparse.Namespace) -> None:
     kiloneuron_report(args)
 
 
+def ei_ring_report(args: argparse.Namespace) -> None:
+    """Enforce the 1024x32 E/I ring self-test and live contracts."""
+
+    profiles = (
+        ("lab", EI_RING_SYNTHESIS_CONTRACT),
+        ("live", EI_RING_LIVE_SYNTHESIS_CONTRACT),
+    )
+    for profile, contract in profiles:
+        print(f"\n1024-logical / 32-lane E/I ring {profile} profile")
+        evaluate_bitstream(
+            ROOT / "build" / f"snn-av-1024x32-ei-mem-{profile}-{args.hw}",
+            contract,
+        )
+
+
+def ei_ring(args: argparse.Namespace) -> None:
+    """Run E/I equivalence, AV simulation, and both R5 build gates."""
+
+    quick(args)
+    METRICS.unlink(missing_ok=True)
+    run([
+        sys.executable,
+        "src/top/snn_av/top.py",
+        "sim",
+        "--hw", args.hw,
+        "--modeline", args.modeline,
+        "--self-test",
+        "--neurons", "1024",
+        "--physical-lanes", "32",
+        "--ei-ring",
+        "--name", "SNN-AV-1024X32-EI-MEM-LAB",
+    ])
+    report(args)
+    for profile, self_test in (("LAB", True), ("LIVE", False)):
+        command = [
+            sys.executable,
+            "src/top/snn_av/top.py",
+            "build",
+            "--hw", args.hw,
+            "--modeline", args.modeline,
+            "--neurons", "1024",
+            "--physical-lanes", "32",
+            "--ei-ring",
+            "--name", f"SNN-AV-1024X32-EI-MEM-{profile}",
+        ]
+        if self_test:
+            command.append("--self-test")
+        run(command)
+    ei_ring_report(args)
+
+
 def make_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--hw", default="r5")
@@ -461,6 +521,7 @@ def make_parser() -> argparse.ArgumentParser:
         "batch", "batch-report",
         "memory", "memory-report",
         "kiloneuron", "kiloneuron-report",
+        "ei-ring", "ei-ring-report",
     ):
         subparsers.add_parser(name)
     return parser
@@ -484,6 +545,8 @@ def main() -> None:
         "memory-report": memory_report,
         "kiloneuron": kiloneuron,
         "kiloneuron-report": kiloneuron_report,
+        "ei-ring": ei_ring,
+        "ei-ring-report": ei_ring_report,
     }
     commands[args.command](args)
 

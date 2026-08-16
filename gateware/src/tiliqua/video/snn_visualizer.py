@@ -11,7 +11,8 @@ class SNNVisualizer(Elaboratable):
     """Draw one cell per neuron from synchronized spike/membrane snapshots."""
 
     def __init__(
-        self, *, neuron_count=64, membrane_level_bits=4, external_rows=False
+        self, *, neuron_count=64, membrane_level_bits=4, external_rows=False,
+        inhibitory_stride=None,
     ):
         if neuron_count not in (64, 128, 256, 512, 1024):
             raise ValueError(
@@ -22,6 +23,9 @@ class SNNVisualizer(Elaboratable):
             raise ValueError("membrane_level_bits must be 2 or 4")
         self.membrane_level_bits = membrane_level_bits
         self.external_rows = external_rows
+        if inhibitory_stride is not None and inhibitory_stride != 4:
+            raise ValueError("only an inhibitory stride of four is supported")
+        self.inhibitory_stride = inhibitory_stride
         self.x_cell_shift = {64: 6, 128: 5, 256: 4, 512: 3, 1024: 3}[
             neuron_count
         ]
@@ -52,6 +56,7 @@ class SNNVisualizer(Elaboratable):
         checker = Signal()
         level_byte = Signal(8)
         activity_byte = Signal(8)
+        inhibitory_cell = Signal()
 
         m.d.comb += [
             inside_grid.eq(
@@ -77,6 +82,10 @@ class SNNVisualizer(Elaboratable):
                 [selected_level] * (8 // self.membrane_level_bits)
             ))),
             activity_byte.eq(Mux(self.activity > 63, 255, self.activity << 2)),
+            inhibitory_cell.eq(
+                (self.neuron_index[:2] == 3)
+                if self.inhibitory_stride == 4 else 0
+            ),
         ]
 
         if self.external_rows:
@@ -107,12 +116,16 @@ class SNNVisualizer(Elaboratable):
         with m.Elif(cell_edge):
             m.d.comb += [self.r.eq(20), self.g.eq(32), self.b.eq(48)]
         with m.Elif(selected_spike):
-            m.d.comb += [self.r.eq(255), self.g.eq(255), self.b.eq(255)]
+            m.d.comb += [
+                self.r.eq(255),
+                self.g.eq(Mux(inhibitory_cell, 96, 255)),
+                self.b.eq(Mux(inhibitory_cell, 32, 255)),
+            ]
         with m.Else():
             m.d.comb += [
-                self.r.eq(level_byte),
+                self.r.eq(Mux(inhibitory_cell, 96 + (level_byte >> 1), level_byte)),
                 self.g.eq(Mux(self.burst, activity_byte, level_byte >> 2)),
-                self.b.eq(255 - level_byte),
+                self.b.eq(Mux(inhibitory_cell, 32, 255 - level_byte)),
             ]
 
         return m

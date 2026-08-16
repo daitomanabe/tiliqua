@@ -42,7 +42,7 @@ class SNNAVTop(Elaboratable):
 
     def __init__(
         self, *, clock_settings, self_test=False, neuron_count=64,
-        physical_lane_count=None,
+        physical_lane_count=None, ei_ring=False,
     ):
         if clock_settings.modeline is None:
             raise ValueError("snn_av requires a fixed video mode")
@@ -50,6 +50,8 @@ class SNNAVTop(Elaboratable):
             raise ValueError(
                 "snn_av supports 64, 128, 256, 512, or 1024 neurons"
             )
+        if ei_ring and (neuron_count != 1024 or physical_lane_count != 32):
+            raise ValueError("E/I ring profile requires 1024 neurons and 32 lanes")
         if physical_lane_count is not None:
             valid_batched = (
                 neuron_count == 256
@@ -65,6 +67,7 @@ class SNNAVTop(Elaboratable):
         self.self_test = self_test
         self.neuron_count = neuron_count
         self.physical_lane_count = physical_lane_count or neuron_count
+        self.ei_ring = ei_ring
         self.pmod0 = eurorack_pmod.EurorackPmod(clock_settings.audio_clock)
         if neuron_count in (512, 1024):
             if physical_lane_count != 32:
@@ -74,6 +77,7 @@ class SNNAVTop(Elaboratable):
             self.core = MemoryBatchedLIFBank(
                 logical_neuron_count=neuron_count,
                 physical_lane_count=physical_lane_count,
+                ei_ring=ei_ring,
             )
         elif physical_lane_count is None:
             self.core = ParallelLIFBank(neuron_count=neuron_count)
@@ -88,6 +92,7 @@ class SNNAVTop(Elaboratable):
             neuron_count=neuron_count,
             membrane_level_bits=self.membrane_level_bits,
             external_rows=neuron_count == 1024,
+            inhibitory_stride=4 if ei_ring else None,
         )
 
         self.video_r = Signal(8)
@@ -103,6 +108,8 @@ class SNNAVTop(Elaboratable):
             if physical_lane_count is None
             else f"{neuron_count}-neuron {physical_lane_count}-lane batched spiking AV"
         )
+        if ei_ring:
+            architecture_brief = f"{architecture_brief} E/I ring"
         self.bitstream_help = BitstreamHelp(
             brief=architecture_brief,
             io_left=[
@@ -344,6 +351,7 @@ def simulation_ports(fragment):
 
 def argparse_callback(parser):
     parser.add_argument("--self-test", action="store_true")
+    parser.add_argument("--ei-ring", action="store_true")
     parser.add_argument(
         "--neurons", type=int, choices=(64, 128, 256, 512, 1024), default=64
     )
@@ -371,6 +379,7 @@ def argparse_fragment(args):
         "self_test": args.self_test,
         "neuron_count": args.neurons,
         "physical_lane_count": args.physical_lanes,
+        "ei_ring": args.ei_ring,
     }
 
 
