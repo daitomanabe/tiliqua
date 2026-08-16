@@ -101,6 +101,30 @@ Some more flags useful for development are:
     - ``--noflatten``: synthesize the design without flattening all modules together. This will lead to a larger, unoptimized design, but the benefit is that the Yosys logs ``build/<my_bitstream>/top.rpt`` will contain a separate synthesis report for each module in your design - so you can see roughly how many resources each component is using.
     - ``--debug-verilog``: dump a verilog translation of the entire project to ``build/<my_bitstream>/top.debug.v``. Note that normally, the Amaranth toolchain does not emit any verilog but instead translates your project directly into an intermediate language called RTLIL which is passed to Yosys. However, if you are familiar with verilog, this can be useful for understanding what is going on under the hood.
 
+Rust manifest round-trip test and dependency MSRV
+--------------------------------------------------
+
+The flash test suite creates a temporary Cargo project and consumes
+``tiliqua-manifest`` as a path dependency. Cargo does not use a library
+dependency's own ``Cargo.lock`` in that situation, so a caret dependency can
+resolve to a newer crate than a direct build of the library did. This can look
+like a manifest serialization failure while the actual error is a newer
+dependency requiring a newer Rust compiler.
+
+Run the narrow compatibility test from ``gateware`` with:
+
+.. code-block:: bash
+
+   pdm run python -m pytest -q \
+     tests/test_flash.py::TestFlashCommandGenerator::test_manifest_rust_compatibility -s
+
+On 2026-08-17, the unused declaration ``fixed = "1.28.0"`` resolved to
+``fixed 1.31.0`` in the temporary project, which required rustc 1.93 while the
+host had rustc 1.92. Removing the unused direct dependency made the round-trip
+test pass again. If a drifting dependency is genuinely required, declare and
+test an explicit MSRV-compatible version policy rather than relying on the
+library's lockfile to constrain downstream resolution.
+
 Flashing to a Bitstream Slot
 ----------------------------
 
