@@ -60,7 +60,8 @@ class DelayLineTests(unittest.TestCase):
             """Send `stimulus_values` to the DUT."""
             s = stimulus_values()
             while True:
-                await ctx.tick().until(dut.i.ready) # TODO: remove. bug?
+                # This pre-wait is required by the endpoint tap configurations.
+                await stream.wait_until(ctx, dut.i.ready)
                 await stream.put(ctx, dut.i, next(s))
 
         def validate_tap(tap):
@@ -136,7 +137,8 @@ class DelayLineTests(unittest.TestCase):
         async def stimulus_wr(ctx):
             for n in range(0, sys.maxsize):
                 await stream.put(ctx, dut.i, fixed.Const(0.8*math.sin(n*0.2), shape=ASQ))
-                await ctx.tick().repeat(30)
+                for _ in range(30):
+                    await ctx.tick()
 
         async def stimulus_rd1(ctx):
             while True:

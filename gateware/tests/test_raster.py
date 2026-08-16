@@ -73,7 +73,8 @@ class RasterTests(unittest.TestCase):
             # Send a few sample points to the stroke
             for n in range(N):
                 await stream.put(ctx, dut.i, [0, 0, 0, 0])
-                await ctx.tick().repeat(4)
+                for _ in range(4):
+                    await ctx.tick()
 
         async def testbench(ctx):
             for _ in range(N):

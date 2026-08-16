@@ -447,7 +447,8 @@ class DSPTests(unittest.TestCase):
             async def stimulus(ctx):
                 for z in range(n_elements):
                     await stream.put(ctx, dut.i[n], 10*n + z)
-                    await ctx.tick().repeat(n+1)
+                    for _ in range(n + 1):
+                        await ctx.tick()
             return stimulus
 
         async def testbench(ctx):

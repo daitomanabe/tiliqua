@@ -9,6 +9,15 @@
 from amaranth.lib import stream
 from amaranth.sim import DomainReset, SimulatorContext
 
+async def wait_until(ctx: SimulatorContext, condition):
+    """Wait for a condition using cancellable one-shot simulator ticks."""
+    while True:
+        _, reset, done = await ctx.tick().sample(condition)
+        if reset:
+            raise DomainReset
+        if done:
+            return
+
 async def put(ctx: SimulatorContext, stream: stream.Interface, payload):
     ctx.set(stream.valid, 1)
     ctx.set(stream.payload, payload)

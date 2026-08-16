@@ -161,10 +161,18 @@ The stream helper now loops over one-shot edge samples instead:
 Simulator processes cannot use ``ctx.get()``; unlike ``until()``, awaiting a
 sampled tick returns the clock-edge flag and reset flag before sampled values.
 Preserving the reset check keeps the old ``DomainReset`` behavior. The same
-pattern is used for ``valid`` plus payload on reads. FFT 17/17 and the complete
-130-test suite passed after this change; full-suite warnings dropped from 94 to
-41. Remaining unraisable warnings come from direct ``repeat()`` users outside
-the stream helper and are separate cleanup work.
+pattern is used for ``valid`` plus payload on reads. A reusable
+``stream.wait_until()`` keeps the same timing where a pre-handshake wait is part
+of test behaviour, and direct ``repeat()`` calls in background processes use
+explicit one-shot tick loops.
+
+Do not delete a wait merely because it triggers the warning. Removing the
+pre-wait from the PSRAM delay-line stimulus broke both zero/maximum-tap endpoint
+profiles (the returned payload was zero instead of 5208). Replacing it with the
+cancellable helper restored both profiles. FFT 17/17, the focused 42 delay/DSP/
+raster tests, and the complete 130-test suite passed; full-suite warnings fell
+from 94 to 31. The remaining warnings are dependency deprecations from LUNA,
+not repository-owned unraisable async-generator warnings.
 
 Flashing to a Bitstream Slot
 ----------------------------
