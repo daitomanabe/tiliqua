@@ -26,7 +26,7 @@ per-neuron weightへ進む前に、768 excitatory neuronと256 inhibitory neuron
 population sizeで割った1-neuron / 1-sample当たりのrateです。
 
 同じcommandを独立に2回実行したresult JSONはともにSHA-256
-``1e06f3435b0a9e1858d2359377f2acea2008528d40c19a709f513339742bb30c`` で、初期state、stimulus、分類結果が
+``78e337bbf8135bdf8c2a1658bff84a7e4d0be303a59fd44794309fcc0c4f5f3b`` で、初期state、stimulus、分類結果が
 byte-identicalであることも確認しました。
 
 .. list-table:: deterministic RTL simulation result
@@ -37,25 +37,33 @@ byte-identicalであることも確認しました。
      - excitatory rate
      - inhibitory rate
      - inhibitory / excitatory
+     - zero-lag correlation
    * - 512
      - low / high
      - 0.03079 / 0.08575
      - 0.03250 / 0.08365
      - 1.05550 / 0.97544
+     - 0.83446 / 0.49584
    * - 1024
      - low / high
      - 0.02995 / 0.08354
      - 0.03223 / 0.08420
      - 1.07609 / 1.00792
+     - 0.91410 / 0.60861
    * - 1536
      - low / high
      - 0.02901 / 0.08111
      - 0.03189 / 0.08319
      - 1.09923 / 1.02571
+     - 0.91155 / 0.69196
 
 3強度とも両populationが発火し、高driveで両rateが増えました。抑制を強めると低/高driveの興奮性rateはともに単調低下し、
 正規化したinhibitory/excitatory比は単調上昇しました。この固定窓のpopulation rateと、Tutorial 17の長いself-test AV出力が
 非単調だったことは矛盾しません。後者はdrive phase、膜電位、reset、非線形DAC monitorを含む別の集合観測です。
+
+同一sampleのE/I countに対するPearson相関はlow 0.834--0.914、high 0.496--0.692でした。探索時に0.5を仮gateにすると
+512/highの0.49584だけが0.004下回りました。これはfailureに合わせて境界を緩める根拠ではありません。相関は現段階では
+descriptive metricとして保存し、hardware captureや異なる初期stateで反復分散を得るまでPASS条件へ昇格しません。
 
 「抑制性spike」の意味
 ---------------------

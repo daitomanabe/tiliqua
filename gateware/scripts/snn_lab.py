@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 from pathlib import Path
 import shutil
 import subprocess
@@ -634,10 +635,27 @@ def capture_population_profile(inhibitory_strength: int) -> dict:
     sim.run()
 
     def summarize(segment):
-        excitatory_mean = sum(row[0] for row in segment) / len(segment)
-        inhibitory_mean = sum(row[1] for row in segment) / len(segment)
+        excitatory = [row[0] for row in segment]
+        inhibitory = [row[1] for row in segment]
+        excitatory_mean = sum(excitatory) / len(segment)
+        inhibitory_mean = sum(inhibitory) / len(segment)
         excitatory_rate = excitatory_mean / 768
         inhibitory_rate = inhibitory_mean / 256
+        excitatory_delta = [value - excitatory_mean for value in excitatory]
+        inhibitory_delta = [value - inhibitory_mean for value in inhibitory]
+        correlation_denominator = math.sqrt(
+            sum(value * value for value in excitatory_delta)
+            * sum(value * value for value in inhibitory_delta)
+        )
+        zero_lag_correlation = (
+            sum(
+                excitatory_value * inhibitory_value
+                for excitatory_value, inhibitory_value in zip(
+                    excitatory_delta, inhibitory_delta
+                )
+            ) / correlation_denominator
+            if correlation_denominator else 0.0
+        )
         return {
             "samples": len(segment),
             "excitatory_mean_spikes": excitatory_mean,
@@ -647,6 +665,7 @@ def capture_population_profile(inhibitory_strength: int) -> dict:
             "inhibitory_to_excitatory_rate_ratio": (
                 inhibitory_rate / excitatory_rate
             ),
+            "zero_lag_population_correlation": zero_lag_correlation,
         }
 
     return {
@@ -683,7 +702,6 @@ def population_study(args: argparse.Namespace) -> None:
                     f"strength {profile['inhibitory_strength']} {population} "
                     "population did not respond to high drive"
                 )
-
     for drive in ("low_drive", "high_drive"):
         ratios = [
             profile[drive]["inhibitory_to_excitatory_rate_ratio"]
@@ -718,7 +736,7 @@ def population_study(args: argparse.Namespace) -> None:
     POPULATION_STUDY.write_text(json.dumps(payload, indent=2) + "\n")
 
     print("\n1024-neuron E/I population-rate study")
-    print(" strength drive   excit rate   inhib rate   inhib/excit")
+    print(" strength drive   excit rate   inhib rate   inhib/excit   correlation")
     for profile in profiles:
         for drive in ("low_drive", "high_drive"):
             item = profile[drive]
@@ -727,7 +745,8 @@ def population_study(args: argparse.Namespace) -> None:
                 f"{drive.removesuffix('_drive'):>5}   "
                 f"{item['excitatory_rate_per_neuron']:.5f}      "
                 f"{item['inhibitory_rate_per_neuron']:.5f}      "
-                f"{item['inhibitory_to_excitatory_rate_ratio']:.5f}"
+                f"{item['inhibitory_to_excitatory_rate_ratio']:.5f}        "
+                f"{item['zero_lag_population_correlation']:.5f}"
             )
     for failure in failures:
         print(f" failure: {failure}")
