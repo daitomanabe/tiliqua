@@ -196,6 +196,7 @@ JSON serializationまで検査します。測定器は波形判定だけでな�
 この版が証明するのは、64個の全並列LIF更新、recurrent response、4 DAC、DVI raster生成、R5 timing、
 ES-9 returnです。学習、可塑性、外部PSRAM、MIDI、USB audio、物理DVI captureはまだ検査していません。
 
-``--self-test`` なしのtopはTiliqua IN 0をnetwork driveとして使用できます。次は同じ常設配線で
-ES-9から複数振幅とburstを送り、入力強度に対する発火率、膜電位、音色の再現可能な応答曲線を測ります。
-その後、結合行列や遅延をPSRAMへ置く版、MIDI/CVでnetwork parameterを変更する版へ段階的に進めます。
+``--self-test`` なしのtopはTiliqua IN 0をnetwork driveとして使用できます。同じ常設配線で
+ES-9から複数振幅を送り、入力強度に対する発火率、膜電位、音色の応答曲線も実測しました。
+続きは :doc:`snn_live_hardware` です。その後、結合行列や遅延をPSRAMへ置く版、MIDI/CVで
+network parameterを変更する版へ段階的に進めます。

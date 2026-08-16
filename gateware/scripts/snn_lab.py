@@ -106,6 +106,18 @@ def build(args: argparse.Namespace) -> None:
         ROOT / "build" / f"snn-av-lab-{args.hw}",
         SYNTHESIS_CONTRACT,
     )
+    run([
+        sys.executable,
+        "src/top/snn_av/top.py",
+        "build",
+        "--hw", args.hw,
+        "--modeline", args.modeline,
+        "--name", "SNN-AV-LIVE",
+    ])
+    evaluate_bitstream(
+        ROOT / "build" / f"snn-av-live-{args.hw}",
+        SYNTHESIS_CONTRACT,
+    )
 
 
 def check(args: argparse.Namespace) -> None:
