@@ -25,6 +25,10 @@ per-neuron weightへ進む前に、768 excitatory neuronと256 inhibitory neuron
 興奮性は768個、抑制性は256個なので、raw spike数なら同じper-neuron activityでも興奮性が約3倍になります。表はそれぞれを
 population sizeで割った1-neuron / 1-sample当たりのrateです。
 
+同じcommandを独立に2回実行したresult JSONはともにSHA-256
+``1e06f3435b0a9e1858d2359377f2acea2008528d40c19a709f513339742bb30c`` で、初期state、stimulus、分類結果が
+byte-identicalであることも確認しました。
+
 .. list-table:: deterministic RTL simulation result
    :header-rows: 1
 
