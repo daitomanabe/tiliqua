@@ -41,15 +41,16 @@ register済みの膜電位から128要素のmonitor和を作り、``membrane_mea
 balanced adder treeを記述しただけでは、広いplacementを跨ぐrouting遅延を解消できません。
 そこでpopulation集計を次の5段へ分けました。
 
-#. input magnitudeと3 control modeをregister
+#. input magnitude、recurrent drive、leak量、16 threshold classをregister
 #. 128個の膜電位とspike bitを同時更新
 #. 8ニューロンごとのspike countと上位4-bit膜電位和をregister
 #. 16個のgroup totalをpopulation totalへ集計
 #. 4 DAC sampleへ写像
 
 1 sample中の追加1 sync cycleは16.7 nsで、48 kHz audio period約20.83 usに対して0.08%です。
-修正版はsync Fmax 81.35 MHzへ上がり、LUT4 9,494、FF 5,245、DSP 1でした。局所集計registerが
-routingを短くし、LUTも減りました。64版も同じgroupingを使い、同一architectureで回帰します。
+grouped reduction追加時はsync Fmax 81.35 MHzへ上がりました。その後live profileと共通のcontrol
+事前計算registerを導入した最終self-testは77.99 MHz、LUT4 9,264、FF 6,662、DSP 1です。
+64版も同じarchitectureで回帰します。
 
 simulationとsynthesis contract
 ------------------------------
@@ -77,13 +78,13 @@ resource/timing contractを順に実行します。2026-08-17の結果は次で�
    * - OUT 1 / OUT 2 / OUT 3 simulation maximum
      - 9,676 / 17,998 / 10,712 count
    * - LUT4 / FF / DSP
-     - 9,494 / 5,245 / 1
+     - 9,264 / 6,662 / 1
    * - sync Fmax
-     - 81.35 MHz（要求60.00 MHz）
+     - 77.99 MHz（要求60.00 MHz）
    * - audio / dvi / dvi5x Fmax
-     - 68.98 / 66.07 / 441.31 MHz
+     - 64.08 / 70.54 / 439.95 MHz
    * - bitstream SHA-256
-     - ``26bbd8ef9c85740deed22101a5d16cff23c64a7155694dbe7028966d71d689cf``
+     - ``1a3f4995dcb1b98b53c5daad19da1764a8b339ba45dbeac03e0fb26c1aad8114``
 
 実機SRAM自己診断
 ----------------
@@ -109,25 +110,25 @@ fresh実測は次の通りです。
      - 実測
      - 判定
    * - OUT 0 p01 / p99
-     - -5.576 / +5.638 V
+     - -5.564 / +5.555 V
      - PASS
    * - OUT 0 RMS
-     - 2.231 V
+     - 2.213 V
      - PASS
    * - OUT 1 low / high activity
-     - +0.157 / +0.666 V
+     - +0.154 / +0.668 V
      - PASS
    * - OUT 2 low / high activity時
-     - +3.054 / +4.719 V
+     - +3.043 / +4.726 V
      - PASS
    * - OUT 3 low / high activity時
-     - +2.506 / +1.796 V
+     - +2.511 / +1.793 V
      - PASS
    * - activityからburst gateへの相関
-     - +0.99587
+     - +0.99609
      - PASS
    * - activityから膜電位への相関
-     - -0.99813
+     - -0.99824
      - PASS
 
 manifestとCLIの小さな制約
@@ -148,5 +149,6 @@ topのvideo mode引数は ``--resolution`` ではなく ``--modeline 720x720p60r
 R5 timing/resource closureを証明します。128 live input、4 controlの実機scan、256ニューロン、
 学習則、PSRAM結合行列、USB/MIDI、物理DVI captureはまだ未検査です。
 
-次は128 live profileで同じ4 CV controlを検査します。その後、完全結合をlogicへ複製せず、疎結合や
-PSRAM上の重み、複数populationを使って音と映像の状態空間を増やします。
+128 live profileで同じ4 CV controlも検査しました。続きは :doc:`snn_128_live_hardware` です。
+その後、完全結合をlogicへ複製せず、疎結合やPSRAM上の重み、複数populationを使って音と映像の
+状態空間を増やします。

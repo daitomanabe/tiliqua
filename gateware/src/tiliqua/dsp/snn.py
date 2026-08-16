@@ -128,12 +128,31 @@ class ParallelLIFBank(wiring.Component):
 
         next_spikes = []
         next_membranes = []
+        leak_amounts = []
+        next_leak_amounts = []
+        dynamic_thresholds = []
+        next_dynamic_thresholds = []
+        for threshold_index in range(16):
+            threshold = self.threshold_for(threshold_index)
+            dynamic_threshold = Signal(14, name=f"dynamic_threshold_{threshold_index}")
+            next_dynamic_threshold = Signal(
+                14, name=f"next_dynamic_threshold_{threshold_index}"
+            )
+            m.d.comb += next_dynamic_threshold.eq(Mux(
+                next_threshold_mode == 0,
+                threshold - 800,
+                Mux(next_threshold_mode == 2, threshold + 800, threshold),
+            ))
+            dynamic_thresholds.append(dynamic_threshold)
+            next_dynamic_thresholds.append(next_dynamic_threshold)
+
         recurrent_drive = Signal(self.count_bits + 3)
-        m.d.comb += recurrent_drive.eq(Mux(
-            self.recurrent_mode == 0,
+        next_recurrent_drive = Signal.like(recurrent_drive)
+        m.d.comb += next_recurrent_drive.eq(Mux(
+            next_recurrent_mode == 0,
             self.spike_count << 1,
             Mux(
-                self.recurrent_mode == 2,
+                next_recurrent_mode == 2,
                 self.spike_count << 3,
                 self.spike_count << 2,
             ),
@@ -141,25 +160,20 @@ class ParallelLIFBank(wiring.Component):
         for index, membrane in enumerate(self.membranes):
             candidate = Signal(18, name=f"candidate_{index}")
             spike = Signal(name=f"next_spike_{index}")
-            leak_amount = Signal(16, name=f"leak_amount_{index}")
+            leak_amount = Signal(12, name=f"leak_amount_{index}")
+            next_leak_amount = Signal(12, name=f"next_leak_amount_{index}")
             neighbor = self.spike_vector[(index - 1) % self.neuron_count]
-            threshold = self.threshold_for(index)
-            dynamic_threshold = Signal(14, name=f"dynamic_threshold_{index}")
+            dynamic_threshold = dynamic_thresholds[index % 16]
             reset_level = (index * 37 + 101) & 0x1FF
             m.d.comb += [
-                leak_amount.eq(Mux(
-                    self.leak_mode == 0,
+                next_leak_amount.eq(Mux(
+                    next_leak_mode == 0,
                     membrane >> 6,
                     Mux(
-                        self.leak_mode == 2,
+                        next_leak_mode == 2,
                         membrane >> 4,
                         membrane >> self.leak_shift,
                     ),
-                )),
-                dynamic_threshold.eq(Mux(
-                    self.threshold_mode == 0,
-                    threshold - 800,
-                    Mux(self.threshold_mode == 2, threshold + 800, threshold),
                 )),
                 candidate.eq(
                     membrane
@@ -171,6 +185,8 @@ class ParallelLIFBank(wiring.Component):
                 ),
                 spike.eq(candidate >= dynamic_threshold),
             ]
+            leak_amounts.append(leak_amount)
+            next_leak_amounts.append(next_leak_amount)
             next_spikes.append(spike)
             next_membranes.append(Mux(spike, reset_level, candidate[:16]))
 
@@ -226,7 +242,8 @@ class ParallelLIFBank(wiring.Component):
             )),
         ]
 
-        # Stage 0 registers input drive and CV modes, stage 1 updates all
+        # Stage 0 registers input drive, recurrent drive, per-neuron leak, and
+        # the 16 threshold classes. Stage 1 updates all
         # neurons, stage 2 registers groups of eight, stage 3 reduces the group
         # totals, and stage 4 maps population state to DAC channels. Five
         # 60 MHz cycles are negligible inside one 48 kHz audio period.
@@ -290,10 +307,19 @@ class ParallelLIFBank(wiring.Component):
                 m.d.sync += [
                     pending_update.eq(1),
                     input_drive.eq(next_input_drive),
+                    recurrent_drive.eq(next_recurrent_drive),
                     self.leak_mode.eq(next_leak_mode),
                     self.recurrent_mode.eq(next_recurrent_mode),
                     self.threshold_mode.eq(next_threshold_mode),
                 ]
+                for leak_amount, next_leak_amount in zip(
+                    leak_amounts, next_leak_amounts
+                ):
+                    m.d.sync += leak_amount.eq(next_leak_amount)
+                for dynamic_threshold, next_dynamic_threshold in zip(
+                    dynamic_thresholds, next_dynamic_thresholds
+                ):
+                    m.d.sync += dynamic_threshold.eq(next_dynamic_threshold)
 
         return m
 

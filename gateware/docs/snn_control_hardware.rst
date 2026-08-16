@@ -50,8 +50,8 @@ monitor adder treeの余裕を増やす
 OUT 3は観測用なので内部16-bit状態を変えず、各膜電位の上位4-bitを加算し、64-neuron population和を
 ``<<6`` して出力します。平均を先に整数化しないため、64個の分数的な集合変化は保持されます。
 
-4 control追加後のlive profileはLUT4 7,815、FF 3,217、DSP 1、sync Fmax 67.57 MHzです。
-self-test profileは定数controlが最適化され、LUT4 5,086、FF 3,103、sync 85.47 MHzです。
+control由来の値を先にregisterするlive profileはLUT4 7,144、FF 3,995、DSP 1、sync Fmax
+80.65 MHzです。self-test profileはLUT4 4,982、FF 3,815、sync 83.96 MHzです。
 
 自動実機scan
 ------------
@@ -98,16 +98,16 @@ fresh実測
      - membrane
    * - leak
      - -1 V
-     - 1.473 V
-     - +0.112 V
-     - 3.038 V
+     - 1.515 V
+     - +0.113 V
+     - 3.056 V
      - 1.728 V
    * - leak
      - 0 V
-     - 1.133 V
+     - 1.119 V
      - +0.006 V
-     - 1.672 V
-     - 2.401 V
+     - 1.677 V
+     - 2.402 V
    * - leak
      - +1 V
      - 0.000 V
@@ -116,43 +116,43 @@ fresh実測
      - 2.024 V
    * - recurrence
      - -1 V
-     - 1.093 V
-     - +0.002 V
-     - 1.638 V
-     - 2.415 V
+     - 1.119 V
+     - +0.003 V
+     - 1.625 V
+     - 2.416 V
    * - recurrence
      - 0 V
-     - 1.136 V
-     - +0.005 V
-     - 1.655 V
+     - 1.131 V
+     - +0.006 V
+     - 1.664 V
      - 2.401 V
    * - recurrence
      - +1 V
-     - 1.182 V
+     - 1.176 V
      - +0.015 V
-     - 1.795 V
-     - 2.306 V
+     - 1.808 V
+     - 2.312 V
    * - threshold
      - -1 V
-     - 1.277 V
+     - 1.310 V
      - +0.053 V
-     - 2.317 V
-     - 1.892 V
+     - 2.322 V
+     - 1.893 V
    * - threshold
      - 0 V
-     - 1.132 V
-     - +0.005 V
-     - 1.656 V
-     - 2.400 V
+     - 1.113 V
+     - +0.006 V
+     - 1.668 V
+     - 2.401 V
    * - threshold
      - +1 V
-     - 1.002 V
-     - -0.033 V
-     - 1.116 V
+     - 0.987 V
+     - -0.032 V
+     - 1.119 V
      - 2.905 V
 
-3回のneutral stateの最大差はactivity 0.0004 V、burst 0.0168 V、membrane 0.0016 V、
-spike RMS 0.0042 Vで全てrepeatability contract内です。
+3回のneutral stateの最大差はactivity 0.0001 V、burst 0.0135 V、membrane 0.0006 V、
+spike RMS 0.0186 Vで全てrepeatability contract内です。
 
 一回のcaptureへ過適合しない
 ---------------------------

@@ -112,11 +112,11 @@ resource/timing contractを順に実行します。2026-08-17の最終結果は�
    * - OUT 3 simulation
      - 0 .. 11,288 count
    * - LUT4 / FF / DSP
-     - 5,086 / 3,103 / 1
+     - 4,982 / 3,815 / 1
    * - sync Fmax
-     - 85.47 MHz（要求60.00 MHz）
+     - 83.96 MHz（要求60.00 MHz）
    * - audio / dvi / dvi5x Fmax
-     - 67.20 / 89.78 / 436.68 MHz
+     - 75.31 / 83.03 / 440.14 MHz
 
 実機自己診断
 ------------
@@ -145,25 +145,25 @@ AudioToolbox outputとAVFoundation inputのtimestampをsample-perfectとは仮�
      - 実測
      - 判定
    * - OUT 0 p01 / p99
-     - -4.158 V / +4.248 V
+     - -4.158 V / +4.289 V
      - PASS
    * - OUT 0 RMS
-     - 1.647 V
+     - 1.659 V
      - PASS
    * - OUT 1 low/high activity
-     - -0.005 V / +0.246 V
+     - -0.000 V / +0.249 V
      - PASS
    * - OUT 2 low/high activity時の平均
-     - +1.442 V / +3.836 V
+     - +1.477 V / +3.863 V
      - PASS
    * - OUT 3 low/high activity時の平均
-     - +2.542 V / +1.821 V
+     - +2.532 V / +1.814 V
      - PASS
    * - activityとburst gateのblock相関
-     - +0.99568
+     - +0.99521
      - PASS
    * - activityと膜電位のblock相関
-     - -0.99825
+     - -0.99814
      - PASS
 
 OUT 2はRTL上0/5 Vですが、audio sampleごとに高速に切り替わるため、analog pathと48 kHz captureでは
@@ -183,7 +183,7 @@ population countをさらにregisterしても53.58 MHzでした。その時点�
 16-bit平均をregisterすると58.56 MHzまで改善し、観測専用平均を上位8-bitへ狭めて61.71 MHzで
 最初のcontractを通過しました。続く4-input版では上位4-bitのpopulation和へ変え、68.95 MHzまで
 改善しました。128-neuron拡張時に8個ごとの局所集計registerを追加し、64版も共通の5段へ揃えた
-現在値は85.47 MHzです。FPGAで「adder treeを書いた」だけではtiming closureを保証しません。
+現在値は83.96 MHzです。FPGAで「adder treeを書いた」だけではtiming closureを保証しません。
 各失敗後に ``top.tim`` の実際のsource/sinkを読み、ネットワーク更新、集計、出力写像をregisterで
 分離します。
 

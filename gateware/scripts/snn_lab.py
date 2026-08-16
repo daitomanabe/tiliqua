@@ -158,6 +158,19 @@ def scale(args: argparse.Namespace) -> None:
         ROOT / "build" / f"snn-av-128-lab-{args.hw}",
         SCALE_SYNTHESIS_CONTRACT,
     )
+    run([
+        sys.executable,
+        "src/top/snn_av/top.py",
+        "build",
+        "--hw", args.hw,
+        "--modeline", args.modeline,
+        "--neurons", "128",
+        "--name", "SNN-AV-128-LIVE",
+    ])
+    evaluate_bitstream(
+        ROOT / "build" / f"snn-av-128-live-{args.hw}",
+        SCALE_SYNTHESIS_CONTRACT,
+    )
 
 
 def make_parser() -> argparse.ArgumentParser:
