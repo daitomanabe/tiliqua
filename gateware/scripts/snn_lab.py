@@ -31,6 +31,9 @@ BATCHED_SYNTHESIS_CONTRACT = (
 MEMORY_SYNTHESIS_CONTRACT = (
     ROOT / "snn" / "snn_512x32_memory_synthesis_contract.json"
 )
+MEMORY_LIVE_SYNTHESIS_CONTRACT = (
+    ROOT / "snn" / "snn_512x32_memory_live_synthesis_contract.json"
+)
 
 
 def run(command: list[str]) -> None:
@@ -50,6 +53,7 @@ def doctor(_: argparse.Namespace) -> None:
         FRONTIER_CONTRACT,
         BATCHED_SYNTHESIS_CONTRACT,
         MEMORY_SYNTHESIS_CONTRACT,
+        MEMORY_LIVE_SYNTHESIS_CONTRACT,
     ]
     missing = [str(path.relative_to(ROOT)) for path in required if not path.is_file()]
     if missing:
@@ -327,17 +331,22 @@ def batch(args: argparse.Namespace) -> None:
 
 
 def memory_report(args: argparse.Namespace) -> None:
-    """Enforce the 512x32 block-memory self-test bitstream contract."""
+    """Enforce the 512x32 block-memory self-test and live contracts."""
 
-    print("\n512-logical / 32-lane block-memory lab profile")
-    evaluate_bitstream(
-        ROOT / "build" / f"snn-av-512x32-mem-lab-{args.hw}",
-        MEMORY_SYNTHESIS_CONTRACT,
+    profiles = (
+        ("lab", MEMORY_SYNTHESIS_CONTRACT),
+        ("live", MEMORY_LIVE_SYNTHESIS_CONTRACT),
     )
+    for profile, contract in profiles:
+        print(f"\n512-logical / 32-lane block-memory {profile} profile")
+        evaluate_bitstream(
+            ROOT / "build" / f"snn-av-512x32-mem-{profile}-{args.hw}",
+            contract,
+        )
 
 
 def memory(args: argparse.Namespace) -> None:
-    """Run 512x32 equivalence, AV simulation, and self-test build gates."""
+    """Run 512x32 equivalence, AV simulation, self-test, and live build gates."""
 
     quick(args)
     METRICS.unlink(missing_ok=True)
@@ -363,6 +372,16 @@ def memory(args: argparse.Namespace) -> None:
         "--neurons", "512",
         "--physical-lanes", "32",
         "--name", "SNN-AV-512X32-MEM-LAB",
+    ])
+    run([
+        sys.executable,
+        "src/top/snn_av/top.py",
+        "build",
+        "--hw", args.hw,
+        "--modeline", args.modeline,
+        "--neurons", "512",
+        "--physical-lanes", "32",
+        "--name", "SNN-AV-512X32-MEM-LIVE",
     ])
     memory_report(args)
 

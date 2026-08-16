@@ -42,8 +42,8 @@ unit testは同じ初期膜電位、drive、leak、recurrence、thresholdで完�
 
     pdm snn_lab memory
 
-このcommandはunit/equivalence、512x32 AV simulation、R5 self-test build、resource/timing contract、bitstream
-SHAを順に検査します。既存bitstreamだけを再評価する場合は次を使います。
+このcommandはunit/equivalence、512x32 AV simulation、R5 self-test/live build、各resource/timing contract、
+bitstream SHAを順に検査します。既存bitstreamだけを再評価する場合は次を使います。
 
 .. code-block:: bash
 
@@ -147,4 +147,5 @@ private management repositoryの常設ES-9 fixtureで次を実行します。
 この段階は512 logical state、32 arithmetic lane、16 synchronous memory batch、完全並列モデルとのbit同値、
 64x8 DVIと4ch audioのsimulation、R5 resource/timing closure、bitstream identity、揮発性SRAM load、常設ES-9
 4ch returnを証明します。SPI flashとcalibration EEPROMは変更していません。
-学習則、可変重み行列、512 live CV control、外部PSRAM、物理DVI captureは未検証です。
+512 live CV controlは :doc:`snn_512_live_hardware` で続けます。学習則、可変重み行列、外部PSRAM、物理DVI
+captureは未検証です。
