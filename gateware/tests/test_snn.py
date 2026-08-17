@@ -21,6 +21,37 @@ from tiliqua.video.snn_visualizer import SNNVisualizer
 
 class SNNVisualizerTests(unittest.TestCase):
 
+    def test_control_meter_shows_selection_level_and_override(self):
+        dut = SNNVisualizer(neuron_count=64)
+
+        async def bench(ctx):
+            ctx.set(dut.y, 68)
+            ctx.set(dut.x, 104 + 128 + 40)
+            ctx.set(dut.control_selected, 1)
+            ctx.set(dut.control_override, 0b0010)
+            ctx.set(dut.control_levels, 160 << 8)
+            await ctx.delay(1e-9)
+            filled = (ctx.get(dut.r), ctx.get(dut.g), ctx.get(dut.b))
+            self.assertEqual(filled, (255, 232, 144))
+
+            ctx.set(dut.x, 104 + 128 + 100)
+            await ctx.delay(1e-9)
+            self.assertEqual(
+                (ctx.get(dut.r), ctx.get(dut.g), ctx.get(dut.b)),
+                (8, 13, 24),
+            )
+
+            ctx.set(dut.x, 104 + 128)
+            await ctx.delay(1e-9)
+            self.assertEqual(
+                (ctx.get(dut.r), ctx.get(dut.g), ctx.get(dut.b)),
+                (255, 255, 255),
+            )
+
+        sim = Simulator(dut)
+        sim.add_testbench(bench)
+        sim.run()
+
     def test_ei_cells_have_distinct_rest_and_spike_colours(self):
         dut = SNNVisualizer(
             neuron_count=1024,

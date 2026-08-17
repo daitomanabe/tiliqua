@@ -37,6 +37,9 @@ class SNNVisualizer(Elaboratable):
         self.activity = Signal((neuron_count + 1).bit_length())
         self.burst = Signal()
         self.frame = Signal(8)
+        self.control_selected = Signal(2)
+        self.control_override = Signal(4)
+        self.control_levels = Signal(32)
         self.neuron_index = Signal(range(neuron_count))
         self.external_row_addr = Signal(range(max(2, neuron_count // 32)))
         self.external_row_data = Signal(32 * (1 + membrane_level_bits))
@@ -57,6 +60,13 @@ class SNNVisualizer(Elaboratable):
         level_byte = Signal(8)
         activity_byte = Signal(8)
         inhibitory_cell = Signal()
+        inside_controls = Signal()
+        control_index = Signal(2)
+        control_x = Signal(7)
+        control_level = Signal(8)
+        control_filled = Signal()
+        control_selected = Signal()
+        control_overridden = Signal()
 
         m.d.comb += [
             inside_grid.eq(
@@ -86,6 +96,16 @@ class SNNVisualizer(Elaboratable):
                 (self.neuron_index[:2] == 3)
                 if self.inhibitory_stride == 4 else 0
             ),
+            inside_controls.eq(
+                (self.x >= 104) & (self.x < 616)
+                & (self.y >= 56) & (self.y < 80)
+            ),
+            control_index.eq((self.x - 104)[7:9]),
+            control_x.eq((self.x - 104)[:7]),
+            control_level.eq(self.control_levels.word_select(control_index, 8)),
+            control_filled.eq(control_x < (control_level >> 1)),
+            control_selected.eq(control_index == self.control_selected),
+            control_overridden.eq(self.control_override.bit_select(control_index, 1)),
         ]
 
         if self.external_rows:
@@ -107,7 +127,23 @@ class SNNVisualizer(Elaboratable):
                 )),
             ]
 
-        with m.If(~inside_grid):
+        with m.If(inside_controls):
+            with m.If((control_x < 2) | (control_x >= 126)
+                      | (self.y < 58) | (self.y >= 78)):
+                m.d.comb += [
+                    self.r.eq(Mux(control_selected, 255, 38)),
+                    self.g.eq(Mux(control_selected, 255, 52)),
+                    self.b.eq(Mux(control_selected, 255, 72)),
+                ]
+            with m.Elif(control_filled):
+                m.d.comb += [
+                    self.r.eq(Mux(control_overridden, 255, 36 + (control_index << 4))),
+                    self.g.eq(Mux(control_index == 1, 232, 88 + (control_index << 5))),
+                    self.b.eq(Mux(control_index == 0, 255, 128 + (control_index << 4))),
+                ]
+            with m.Else():
+                m.d.comb += [self.r.eq(8), self.g.eq(13), self.b.eq(24)]
+        with m.Elif(~inside_grid):
             m.d.comb += [
                 self.r.eq(Mux(checker, 10, 3)),
                 self.g.eq(Mux(self.burst, activity_byte, Mux(checker, 14, 4))),

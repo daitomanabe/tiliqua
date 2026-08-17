@@ -5,7 +5,7 @@
 """Parallel spiking audio/video top for Tiliqua R5."""
 
 from amaranth import (
-    ClockSignal, Elaboratable, Module, ResetSignal, Signal, unsigned,
+    Cat, ClockSignal, Elaboratable, Module, ResetSignal, Signal, unsigned,
 )
 from amaranth.lib import data, wiring
 from amaranth.lib.cdc import FFSynchronizer
@@ -23,8 +23,10 @@ from tiliqua.dsp.snn import (
     PopulationEnsembleSonifier,
     SNNTestSource,
 )
+from tiliqua.dsp.snn_control import SNNControlSurface, SNNMidiCCDecoder
 from tiliqua.dsp.stream_util import SyncFIFOBuffered
-from tiliqua.periph import eurorack_pmod
+from tiliqua import midi
+from tiliqua.periph import encoder, eurorack_pmod
 from tiliqua.platform import RebootProvider
 from tiliqua.video import dvi
 from tiliqua.video.snn_visualizer import SNNVisualizer
@@ -125,6 +127,9 @@ class SNNAVTop(Elaboratable):
         self.cv_output_active = Signal(init=int(cv_output))
         self.test_phase = Signal(32)
         self.test_sample_index = Signal(32)
+        self.control_selected = Signal(2)
+        self.control_override = Signal(4)
+        self.control_levels = Signal(32)
         self.sim_regression_name = "SNN-AV"
         self.sim_metrics_filename = "snn-av-metrics.json"
         architecture_brief = (
@@ -156,11 +161,11 @@ class SNNAVTop(Elaboratable):
                 "threshold control", *output_labels,
             ],
             io_right=[
-                "", "", (
+                "knob: SNN control", "", (
                     "64x16 neuron grid" if neuron_count == 1024
                     else f"{neuron_count // 8}x8 neuron grid"
                 ),
-                "", "", "",
+                "", "", "TRS MIDI CC20-24",
             ],
         )
 
@@ -185,14 +190,27 @@ class SNNAVTop(Elaboratable):
     def elaborate(self, platform):
         m = Module()
 
+        button_sync = Signal()
+        encoder_step = Signal()
+        encoder_direction = Signal()
+
         if sim.is_hw(platform):
             m.submodules.car = platform.clock_domain_generator(self.clock_settings)
+            encoder_pins = platform.request("encoder")
             m.submodules.reboot = reboot = RebootProvider(
                 self.clock_settings.frequencies.sync
             )
-            m.submodules.btn = FFSynchronizer(
-                platform.request("encoder").s.i, reboot.button
+            m.submodules.button_cdc = FFSynchronizer(
+                encoder_pins.s.i, button_sync
             )
+            m.d.comb += reboot.button.eq(button_sync)
+            if not self.self_test:
+                m.submodules.encoder_decode = encoder_decode = encoder.IQDecode()
+                m.d.comb += [
+                    encoder_decode.iq.eq(Cat(encoder_pins.i.i, encoder_pins.q.i)),
+                    encoder_step.eq(encoder_decode.step),
+                    encoder_direction.eq(encoder_decode.direction),
+                ]
             m.submodules.pmod0_provider = pmod0_provider = eurorack_pmod.FFCProvider()
             wiring.connect(m, self.pmod0.pins, pmod0_provider.pins)
             m.d.comb += self.pmod0.codec_mute.eq(reboot.mute)
@@ -218,7 +236,31 @@ class SNNAVTop(Elaboratable):
             wiring.connect(m, test_source_buffer.o, core.i)
             m.d.comb += self.test_sample_index.eq(test_source.sample_index)
         else:
-            wiring.connect(m, pmod0.o_cal, core.i)
+            m.submodules.control_surface = control_surface = SNNControlSurface(
+                clock_sync_hz=int(self.clock_settings.frequencies.sync)
+            )
+            wiring.connect(m, pmod0.o_cal, control_surface.i)
+            wiring.connect(m, control_surface.o, core.i)
+            m.d.comb += [
+                control_surface.encoder_step.eq(encoder_step),
+                control_surface.encoder_direction.eq(encoder_direction),
+                control_surface.button.eq(button_sync),
+                self.control_selected.eq(control_surface.selected),
+                self.control_override.eq(control_surface.override_mask),
+                self.control_levels.eq(control_surface.control_levels),
+            ]
+            if sim.is_hw(platform):
+                midi_pins = platform.request("midi")
+                m.submodules.serial_midi_rx = serial_midi_rx = midi.SerialRx(
+                    system_clk_hz=int(self.clock_settings.frequencies.sync),
+                    pins=midi_pins,
+                    rx_depth=4,
+                )
+                m.submodules.midi_decode = midi_decode = SNNMidiCCDecoder()
+                wiring.connect(m, serial_midi_rx.o, midi_decode.i)
+                wiring.connect(m, midi_decode.o, control_surface.i_midi)
+            else:
+                m.d.comb += control_surface.i_midi.valid.eq(0)
             m.d.comb += self.test_sample_index.eq(core.sample_index)
         if self.cv_output:
             m.submodules.cv_conductor = cv_conductor = PopulationCVConductor(
@@ -375,6 +417,9 @@ class SNNAVTop(Elaboratable):
             visualizer.activity.eq(frame_activity),
             visualizer.burst.eq(frame_burst),
             visualizer.frame.eq(frame),
+            visualizer.control_selected.eq(self.control_selected),
+            visualizer.control_override.eq(self.control_override),
+            visualizer.control_levels.eq(self.control_levels),
         ]
         with m.If(dvi_tgen.ctrl.de):
             m.d.comb += [
@@ -418,6 +463,9 @@ def simulation_ports(fragment):
         "cv_output_active": (fragment.cv_output_active, None),
         "test_phase": (fragment.test_phase, None),
         "test_sample_index": (fragment.test_sample_index, None),
+        "control_selected": (fragment.control_selected, None),
+        "control_override": (fragment.control_override, None),
+        "control_levels": (fragment.control_levels, None),
     }
 
 

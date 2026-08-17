@@ -29,10 +29,10 @@ pdm run python src/top/snn_av/top.py build \
   --name SNN-AV-1024X32-EI-CV-LIVE
 ```
 
-The 2026-08-17 gate passed with 5,685 LUT4, 5,340 FF, 18 DP16KD, one DSP,
-and 74.16 MHz sync-domain Fmax against a 60 MHz requirement. The resulting
+The 2026-08-17 direct-control gate passed with 6,001 LUT4, 5,520 FF, 18 DP16KD,
+one DSP, and 73.13 MHz sync-domain Fmax against a 60 MHz requirement. The resulting
 `top.bit` SHA256 was
-`0b6a7cf2e8cd213f699a0b2b3aac2ddb21eeef59de6049dece32b11426eca842`.
+`bc39ea61944664c2b32412058240eb8d522de87719a3858d79aaa089b733244c`.
 
 This top does not contain a SoC, so audio-board calibration constants stored in
 EEPROM are not loaded automatically. Keep generic simulation values in the
