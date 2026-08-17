@@ -19,6 +19,7 @@ from tiliqua.dsp.snn import (
     BatchedLIFBank,
     MemoryBatchedLIFBank,
     ParallelLIFBank,
+    PopulationToneMapper,
     SNNTestSource,
 )
 from tiliqua.dsp.stream_util import SyncFIFOBuffered
@@ -43,6 +44,7 @@ class SNNAVTop(Elaboratable):
     def __init__(
         self, *, clock_settings, self_test=False, neuron_count=64,
         physical_lane_count=None, ei_ring=False, inhibitory_strength=1024,
+        sonification=False,
     ):
         if clock_settings.modeline is None:
             raise ValueError("snn_av requires a fixed video mode")
@@ -54,6 +56,12 @@ class SNNAVTop(Elaboratable):
             raise ValueError("E/I ring profile requires 1024 neurons and 32 lanes")
         if not ei_ring and inhibitory_strength != 1024:
             raise ValueError("inhibitory strength requires the E/I ring profile")
+        if sonification and not (
+            neuron_count == 1024 and physical_lane_count == 32 and ei_ring
+        ):
+            raise ValueError(
+                "sonification requires the 1024-neuron 32-lane E/I ring profile"
+            )
         if physical_lane_count is not None:
             valid_batched = (
                 neuron_count == 256
@@ -71,6 +79,7 @@ class SNNAVTop(Elaboratable):
         self.physical_lane_count = physical_lane_count or neuron_count
         self.ei_ring = ei_ring
         self.inhibitory_strength = inhibitory_strength
+        self.sonification = sonification
         self.pmod0 = eurorack_pmod.EurorackPmod(clock_settings.audio_clock)
         if neuron_count in (512, 1024):
             if physical_lane_count != 32:
@@ -114,11 +123,15 @@ class SNNAVTop(Elaboratable):
         )
         if ei_ring:
             architecture_brief = f"{architecture_brief} E/I ring"
+        if sonification:
+            architecture_brief = "1024-neuron 32-lane E/I spiking AV sonifier"
         self.bitstream_help = BitstreamHelp(
             brief=architecture_brief,
             io_left=[
                 "network drive", "leak control", "recurrence control",
-                "threshold control", "spike audio", "population activity",
+                "threshold control", (
+                    "SNN pentatonic tone" if sonification else "spike audio"
+                ), "population activity",
                 "burst gate", "mean membrane",
             ],
             io_right=[
@@ -135,7 +148,9 @@ class SNNAVTop(Elaboratable):
                 brief=f"{architecture_brief} self-test",
                 io_left=[
                     "unused", "unused", "unused", "unused",
-                    "spike audio", "population activity", "burst gate", "mean membrane",
+                    (
+                        "SNN pentatonic tone" if sonification else "spike audio"
+                    ), "population activity", "burst gate", "mean membrane",
                 ],
                 io_right=[
                     "", "",
@@ -185,7 +200,16 @@ class SNNAVTop(Elaboratable):
         else:
             wiring.connect(m, pmod0.o_cal, core.i)
             m.d.comb += self.test_sample_index.eq(core.sample_index)
-        wiring.connect(m, core.o, pmod0.i_cal)
+        if self.sonification:
+            m.submodules.sonifier = sonifier = PopulationToneMapper(
+                neuron_count=self.neuron_count,
+                sample_rate=self.clock_settings.audio_clock.fs(),
+            )
+            m.d.comb += sonifier.spike_count.eq(core.spike_count)
+            wiring.connect(m, core.o, sonifier.i)
+            wiring.connect(m, sonifier.o, pmod0.i_cal)
+        else:
+            wiring.connect(m, core.o, pmod0.i_cal)
 
         for member in dvi_tgen.timings.signature.members:
             m.d.comb += getattr(dvi_tgen.timings, member).eq(
@@ -356,6 +380,7 @@ def simulation_ports(fragment):
 def argparse_callback(parser):
     parser.add_argument("--self-test", action="store_true")
     parser.add_argument("--ei-ring", action="store_true")
+    parser.add_argument("--sonification", action="store_true")
     parser.add_argument(
         "--inhibitory-strength",
         type=int,
@@ -391,6 +416,7 @@ def argparse_fragment(args):
         "physical_lane_count": args.physical_lanes,
         "ei_ring": args.ei_ring,
         "inhibitory_strength": args.inhibitory_strength,
+        "sonification": args.sonification,
     }
 
 

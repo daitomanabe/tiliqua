@@ -11,8 +11,10 @@ from tiliqua.dsp.snn import (
     BatchedLIFBank,
     MemoryBatchedLIFBank,
     ParallelLIFBank,
+    PopulationToneMapper,
     SNNTestSource,
 )
+from tiliqua.dsp.synth import midi_note_phase_increment
 from tiliqua.video.snn_visualizer import SNNVisualizer
 
 
@@ -121,6 +123,79 @@ class SNNVisualizerTests(unittest.TestCase):
             )
 
         sim = Simulator(dut)
+        sim.add_testbench(bench)
+        sim.run()
+
+
+class PopulationToneMapperTests(unittest.TestCase):
+
+    def test_pentatonic_pitch_is_bounded_and_backpressure_safe(self):
+        dut = PopulationToneMapper(
+            neuron_count=1024,
+            sample_rate=48_000,
+            control_period_samples=4,
+        )
+        samples = []
+
+        async def bench(ctx):
+            ctx.set(dut.i.valid, 1)
+            ctx.set(dut.o.ready, 1)
+            ctx.set(dut.spike_count, 40)
+            ctx.set(dut.i.payload[0].as_value(), 31_000)
+            ctx.set(dut.i.payload[1].as_value(), 1234)
+            ctx.set(dut.i.payload[2].as_value(), 2345)
+            ctx.set(dut.i.payload[3].as_value(), 3456)
+
+            for _ in range(5):
+                samples.append(ctx.get(dut.o.payload[0].as_value()))
+                self.assertEqual(ctx.get(dut.o.payload[1].as_value()), 1234)
+                self.assertEqual(ctx.get(dut.o.payload[2].as_value()), 2345)
+                self.assertEqual(ctx.get(dut.o.payload[3].as_value()), 3456)
+                await ctx.tick()
+
+            # 40 spikes selects scale degree 5 after the four-sample control
+            # period. The new increment takes effect on the following sample.
+            self.assertEqual(ctx.get(dut.note_index), 5)
+            phase_before_stall = ctx.get(dut.phase)
+            sample_before_stall = ctx.get(dut.o.payload[0].as_value())
+            ctx.set(dut.o.ready, 0)
+            for _ in range(4):
+                await ctx.tick()
+                self.assertEqual(ctx.get(dut.phase), phase_before_stall)
+                self.assertEqual(
+                    ctx.get(dut.o.payload[0].as_value()), sample_before_stall
+                )
+
+            ctx.set(dut.o.ready, 1)
+            await ctx.tick()
+            expected_increment = midi_note_phase_increment(48, 48_000)
+            self.assertEqual(
+                ctx.get(dut.phase),
+                (phase_before_stall + expected_increment) & 0xFFFFFFFF,
+            )
+
+        sim = Simulator(dut)
+        sim.add_clock(1e-6)
+        sim.add_testbench(bench)
+        sim.run()
+        self.assertTrue(all(-16384 <= sample <= 16383 for sample in samples))
+
+    def test_spike_count_clamps_to_top_note(self):
+        dut = PopulationToneMapper(
+            neuron_count=1024,
+            control_period_samples=2,
+        )
+
+        async def bench(ctx):
+            ctx.set(dut.i.valid, 1)
+            ctx.set(dut.o.ready, 1)
+            ctx.set(dut.spike_count, 1024)
+            for _ in range(3):
+                await ctx.tick()
+            self.assertEqual(ctx.get(dut.note_index), 7)
+
+        sim = Simulator(dut)
+        sim.add_clock(1e-6)
         sim.add_testbench(bench)
         sim.run()
 

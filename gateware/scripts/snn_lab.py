@@ -52,6 +52,9 @@ EI_RING_SYNTHESIS_CONTRACT = (
 EI_RING_LIVE_SYNTHESIS_CONTRACT = (
     ROOT / "snn" / "snn_1024x32_ei_ring_live_synthesis_contract.json"
 )
+SONIFICATION_LIVE_SYNTHESIS_CONTRACT = (
+    ROOT / "snn" / "snn_1024x32_ei_sonification_live_synthesis_contract.json"
+)
 
 
 def run(command: list[str]) -> None:
@@ -76,6 +79,7 @@ def doctor(_: argparse.Namespace) -> None:
         KILONEURON_LIVE_SYNTHESIS_CONTRACT,
         EI_RING_SYNTHESIS_CONTRACT,
         EI_RING_LIVE_SYNTHESIS_CONTRACT,
+        SONIFICATION_LIVE_SYNTHESIS_CONTRACT,
     ]
     missing = [str(path.relative_to(ROOT)) for path in required if not path.is_file()]
     if missing:
@@ -88,6 +92,7 @@ def doctor(_: argparse.Namespace) -> None:
     print("  memory             512 logical / 32 lanes / 24.576 M updates/s")
     print("  kiloneuron         1024 logical / 32 lanes / 49.152 M updates/s")
     print("  ei-ring            1024 logical / 32 lanes / 3:1 E/I ring")
+    print("  sonification       E/I population -> C-minor pentatonic triangle")
 
 
 def quick(_: argparse.Namespace) -> None:
@@ -510,6 +515,67 @@ def ei_ring(args: argparse.Namespace) -> None:
     ei_ring_report(args)
 
 
+def sonification_report(args: argparse.Namespace) -> None:
+    """Enforce the R5 QoR contract for the live pitched-output profile."""
+
+    print("\n1024-neuron E/I pentatonic sonification live profile")
+    evaluate_bitstream(
+        ROOT / "build" / f"snn-av-1024x32-ei-sonify-live-{args.hw}",
+        SONIFICATION_LIVE_SYNTHESIS_CONTRACT,
+    )
+
+
+def sonification(args: argparse.Namespace) -> None:
+    """Regress, simulate, and build the optional pitched-output profile."""
+
+    quick(args)
+    METRICS.unlink(missing_ok=True)
+    run([
+        sys.executable,
+        "src/top/snn_av/top.py",
+        "sim",
+        "--hw", args.hw,
+        "--modeline", args.modeline,
+        "--self-test",
+        "--neurons", "1024",
+        "--physical-lanes", "32",
+        "--ei-ring",
+        "--sonification",
+        "--name", "SNN-AV-1024X32-EI-SONIFY-LAB",
+    ])
+    failures = load_and_report()
+    metrics = json.loads(METRICS.read_text())
+    tone = metrics["audio"][0]
+    if not 8 <= tone["zero_crossings"] <= 64:
+        failures.append(
+            "audio 0 zero crossings do not describe a low-frequency pitched tone"
+        )
+    if not 6_000.0 <= tone["mean_abs"] <= 9_000.0:
+        failures.append("audio 0 mean amplitude is outside the conservative tone range")
+    print("\nSNN sonification simulation contract")
+    print(f"  result             {'PASS' if not failures else 'FAIL'}")
+    print(f"  zero crossings     {tone['zero_crossings']} / {tone['samples']} samples")
+    print(f"  mean absolute      {tone['mean_abs']:.1f}")
+    for failure in failures:
+        print(f"  failure            {failure}")
+    if failures:
+        raise SystemExit("sonification simulation contract failed")
+
+    run([
+        sys.executable,
+        "src/top/snn_av/top.py",
+        "build",
+        "--hw", args.hw,
+        "--modeline", args.modeline,
+        "--neurons", "1024",
+        "--physical-lanes", "32",
+        "--ei-ring",
+        "--sonification",
+        "--name", "SNN-AV-1024X32-EI-SONIFY-LIVE",
+    ])
+    sonification_report(args)
+
+
 def inhibition_study(args: argparse.Namespace) -> None:
     """Sweep three constant inhibitory strengths through AV simulation."""
 
@@ -774,6 +840,7 @@ def make_parser() -> argparse.ArgumentParser:
         "memory", "memory-report",
         "kiloneuron", "kiloneuron-report",
         "ei-ring", "ei-ring-report",
+        "sonification", "sonification-report",
         "inhibition-study",
         "inhibition-study-report",
         "population-study",
@@ -802,6 +869,8 @@ def main() -> None:
         "kiloneuron-report": kiloneuron_report,
         "ei-ring": ei_ring,
         "ei-ring-report": ei_ring_report,
+        "sonification": sonification,
+        "sonification-report": sonification_report,
         "inhibition-study": inhibition_study,
         "inhibition-study-report": inhibition_study_report,
         "population-study": population_study,

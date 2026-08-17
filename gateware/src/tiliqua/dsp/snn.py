@@ -10,6 +10,7 @@ from amaranth.lib.memory import Memory
 from amaranth.lib.wiring import In, Out
 
 from . import ASQ, asq_from_volts
+from .synth import midi_note_phase_increment
 
 
 def balanced_sum(values):
@@ -27,6 +28,105 @@ def balanced_sum(values):
                 next_level.append(level[index])
         level = next_level
     return level[0]
+
+
+class PopulationToneMapper(wiring.Component):
+    """Replace raw spike audio with a slowly changing pitched triangle.
+
+    The diagnostic SNN emits a bipolar pulse whose amplitude is the total
+    spike count. That signal is useful for measurement, but perceptually it is
+    close to broadband noise. This optional mapper samples the population
+    count at a deliberately slow control rate and selects one note from a
+    C-minor pentatonic table. Phase remains continuous across note changes, so
+    the neural population changes pitch without introducing waveform steps.
+
+    Channels 1--3 pass through unchanged. One input transfer advances exactly
+    one oscillator sample, preserving stream backpressure semantics.
+    """
+
+    NOTES = (36, 39, 41, 43, 46, 48, 51, 53)
+
+    def __init__(
+        self, *, neuron_count=1024, sample_rate=48_000,
+        control_period_samples=4096,
+    ):
+        if neuron_count < 8 or neuron_count > 1024:
+            raise ValueError("neuron_count must be in the range 8..1024")
+        if sample_rate <= 0:
+            raise ValueError("sample_rate must be positive")
+        if (
+            control_period_samples < 2
+            or control_period_samples & (control_period_samples - 1)
+        ):
+            raise ValueError("control_period_samples must be a power of two >= 2")
+        self.neuron_count = neuron_count
+        self.sample_rate = sample_rate
+        self.control_period_samples = control_period_samples
+        self._increments = [
+            midi_note_phase_increment(note, sample_rate)
+            for note in self.NOTES
+        ]
+        count_bits = (neuron_count + 1).bit_length()
+        super().__init__({
+            "i": In(stream.Signature(data.ArrayLayout(ASQ, 4))),
+            "spike_count": In(unsigned(count_bits)),
+            "o": Out(stream.Signature(data.ArrayLayout(ASQ, 4))),
+            "phase": Out(unsigned(32)),
+            "note_index": Out(unsigned(3)),
+        })
+
+    def elaborate(self, platform):
+        m = Module()
+
+        phase = Signal(32)
+        note_index = Signal(3, init=4)
+        control_counter = Signal(range(self.control_period_samples))
+        note_increments = Array(Const(value, 32) for value in self._increments)
+        sampled_note_index = Signal(3)
+        triangle_folded = Signal(16)
+        triangle_full = Signal(signed(16))
+        triangle_quiet = Signal(signed(16))
+
+        # Eight spikes per scale step covers the useful 0..63 unsaturated
+        # population-activity range of the 1024-neuron E/I fixture. Clamp
+        # larger bursts to the top note instead of wrapping the scale.
+        m.d.comb += [
+            sampled_note_index.eq(Mux(
+                self.spike_count >= 56,
+                7,
+                self.spike_count >> 3,
+            )),
+            triangle_folded.eq(Mux(
+                phase[31],
+                ~phase[15:31],
+                phase[15:31],
+            )),
+            triangle_full.eq(triangle_folded ^ Const(0x8000, 16)),
+            # Half scale is about 4.096 V peak in calibrated ASQ units. This
+            # remains below the older raw-spike peaks while leaving clear
+            # headroom above the physical fixture's noise floor.
+            triangle_quiet.eq(triangle_full >> 1),
+            self.o.valid.eq(self.i.valid),
+            self.i.ready.eq(self.o.ready),
+            self.o.payload[0].as_value().eq(triangle_quiet),
+            self.o.payload[1].eq(self.i.payload[1]),
+            self.o.payload[2].eq(self.i.payload[2]),
+            self.o.payload[3].eq(self.i.payload[3]),
+            self.phase.eq(phase),
+            self.note_index.eq(note_index),
+        ]
+
+        with m.If(self.i.valid & self.o.ready):
+            m.d.sync += phase.eq(phase + note_increments[note_index])
+            with m.If(control_counter == self.control_period_samples - 1):
+                m.d.sync += [
+                    control_counter.eq(0),
+                    note_index.eq(sampled_note_index),
+                ]
+            with m.Else():
+                m.d.sync += control_counter.eq(control_counter + 1)
+
+        return m
 
 
 class ParallelLIFBank(wiring.Component):
