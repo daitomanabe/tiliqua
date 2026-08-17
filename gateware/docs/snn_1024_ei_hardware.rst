@@ -56,10 +56,10 @@ R5 synthesisとtiming修正
      - 67.81 / 74.35 / 65.86 / 346.38
      - ``362315f237191036c195419539b9283f47e97cc8d8c006feffaa634e151e06c5``
    * - live
-     - 5,811 / 5,365 / 18 / 1
+     - 5,806 / 5,365 / 18 / 1
      - 37% / 22% / 32%
-     - 63.24 / 69.32 / 62.08 / 359.58
-     - ``60d57b9de175cc67e1cf2aeebc07906bb3f72df0098ed039e53d6bac0b85f3e7``
+     - 62.01 / 67.94 / 61.50 / 405.35
+     - ``46f6f88d18da195b50c419d136feb8d214e9ebf423d5d3ebe5653e92e5261b9a``
 
 最初のself buildはbitstreamを生成しましたが、sync 59.37 MHzで60 MHz contractを失敗したためSRAMへはloadしませんでした。
 critical pathはthreshold compare/resetから最終batchのsample accumulatorまで連続していました。E/I profileだけ
@@ -88,10 +88,10 @@ liveの+/-2 V activity差は0.780 Vです。controlではstrong leakがactivity 
 
 .. note::
 
-   上記live SHA ``60d57b...`` はTutorial 16時点で実機検証したarchiveです。Tutorial 17で抑制強度を
-   elaboration parameter化した現行sourceは、default 1024でもlive synthesis SHAが ``46f6f8...`` へ変わりました。
-   simulation/equivalence/timingはPASSしていますが、権限session終了後のbuildなので新SHAは実機未検証です。次sessionで
-   SRAM再試験するまで両者を混同しないでください。self-test SHAは ``362315...`` のまま一致しました。
+   Tutorial 17で抑制強度をelaboration parameter化すると、live SHAは旧実機済み ``60d57b...`` から
+   ``46f6f8...`` へ変わりました。2026-08-17 12:38の明示candidate transactionでlive 6/6、control 9/9、tone 3/3が
+   同じ新SHA、揮発性SRAM、3:1 E/I topologyを記録し、hardware-validated identityへ昇格しました。summaryはprivate管理repoの
+   ``artifacts/snn-ei-revalidate/20260817-123818/result.json`` です。self-test SHAは ``362315...`` のまま一致しました。
 
 計測contractで得た知見
 -----------------------
@@ -110,5 +110,5 @@ liveの+/-2 V activity差は0.780 Vです。controlではstrong leakがactivity 
 ------------------
 
 固定3:1 E/I topology、符号付き局所結合、完全並列参照との計算等価、pixel-level E/I色、audio/DVI simulation、R5 timing/resource、
-自己診断、bipolar drive、3 CV responseまで証明しました。重み可変化、STDP、長距離結合、発火遅延、物理DVI画面の
+自己診断、bipolar drive、3 CV response、audio-rate tone responseまで証明しました。重み可変化、STDP、長距離結合、発火遅延、物理DVI画面の
 カメラ検証は未実装です。次はこの安定したE/I基盤に小さな可塑性または重みtableを加え、同じclosure loopで進めます。

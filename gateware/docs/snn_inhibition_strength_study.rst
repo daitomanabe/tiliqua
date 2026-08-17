@@ -101,9 +101,10 @@ parameter化後にdefault強度1024もself/liveを再buildしました。self-te
 LUT4 5,806、FF 5,365、sync/audio/dvi/dvi5x 62.01/67.94/61.50/405.35 MHz、SHA
 ``46f6f88d18da195b50c419d136feb8d214e9ebf423d5d3ebe5653e92e5261b9a`` となり、2回buildして同じSHAを再現しました。
 
-全clock/resource、AV metrics、並列参照等価はPASSしていますが、以前実機でPASSしたlive SHA ``60d57b...`` とは異なります。
-bitstream生成や機能simulationを実機PASSへ読み替えず、現行live SHAは次の権限sessionで固定ES-9のlive/control/tone試験を
-再実行するまでsynthesis-onlyとします。
+全clock/resource、AV metrics、並列参照等価をPASSした後、2026-08-17 12:38の固定ES-9 transactionで現行live SHA
+``46f6f88d...`` のlive/control/toneを同じ明示artifactに対して再実行しました。3 stageすべてがmeasurement、SHA、3:1 E/I
+topologyをPASSし、hardware-validated identityへ昇格しました。生成やsimulationだけを実機PASSへ読み替えず、transactionの
+summaryが ``eligible_for_default_sha_update: true`` になった後だけ昇格する境界は維持します。
 
 証明範囲と次段階
 ----------------
