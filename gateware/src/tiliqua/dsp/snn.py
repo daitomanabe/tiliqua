@@ -30,28 +30,34 @@ def balanced_sum(values):
     return level[0]
 
 
-class PopulationToneMapper(wiring.Component):
-    """Replace raw spike audio with a slowly changing pitched triangle.
+class PopulationEnsembleSonifier(wiring.Component):
+    """Turn total, excitatory, inhibitory, and balance activity into four voices.
 
     The diagnostic SNN emits a bipolar pulse whose amplitude is the total
     spike count. That signal is useful for measurement, but perceptually it is
-    close to broadband noise. This optional mapper samples the population
-    count at a deliberately slow control rate and selects one note from a
-    C-minor pentatonic table. Phase remains continuous across note changes, so
-    the neural population changes pitch without introducing waveform steps.
+    close to broadband noise. This optional mapper samples the E/I population
+    at a deliberately slow control rate and selects four related C-minor
+    pentatonic notes: total activity, excitatory activity, inhibitory activity,
+    and normalized E/I balance. Each voice has an independent phase-continuous
+    triangle oscillator, so all four physical outputs are musically useful.
 
-    Channels 1--3 pass through unchanged. One input transfer advances exactly
-    one oscillator sample, preserving stream backpressure semantics.
+    One input transfer advances exactly one sample in every oscillator,
+    preserving stream backpressure semantics.
     """
 
-    NOTES = (36, 39, 41, 43, 46, 48, 51, 53)
+    VOICE_NOTES = (
+        (36, 39, 41, 43, 46, 48, 51, 53),
+        (48, 51, 53, 55, 58, 60, 63, 65),
+        (43, 46, 48, 51, 53, 55, 58, 60),
+        (24, 27, 29, 31, 34, 34, 34, 34),
+    )
 
     def __init__(
         self, *, neuron_count=1024, sample_rate=48_000,
         control_period_samples=4096,
     ):
-        if neuron_count < 8 or neuron_count > 1024:
-            raise ValueError("neuron_count must be in the range 8..1024")
+        if neuron_count != 1024:
+            raise ValueError("population ensemble sonifier requires 1024 neurons")
         if sample_rate <= 0:
             raise ValueError("sample_rate must be positive")
         if (
@@ -62,67 +68,133 @@ class PopulationToneMapper(wiring.Component):
         self.neuron_count = neuron_count
         self.sample_rate = sample_rate
         self.control_period_samples = control_period_samples
-        self._increments = [
-            midi_note_phase_increment(note, sample_rate)
-            for note in self.NOTES
+        self._increments = tuple(
+            tuple(
+                midi_note_phase_increment(note, sample_rate)
+                for note in voice_notes
+            )
+            for voice_notes in self.VOICE_NOTES
+        )
+        self.phases = [
+            Signal(32, init=phase)
+            for phase in (0x00000000, 0x40000000, 0x80000000, 0xC0000000)
         ]
+        self.note_indices = [Signal(3, init=2) for _ in range(4)]
         count_bits = (neuron_count + 1).bit_length()
         super().__init__({
             "i": In(stream.Signature(data.ArrayLayout(ASQ, 4))),
             "spike_count": In(unsigned(count_bits)),
+            "excitatory_spike_count": In(unsigned(10)),
+            "inhibitory_spike_count": In(unsigned(9)),
             "o": Out(stream.Signature(data.ArrayLayout(ASQ, 4))),
-            "phase": Out(unsigned(32)),
-            "note_index": Out(unsigned(3)),
         })
 
     def elaborate(self, platform):
         m = Module()
 
-        phase = Signal(32)
-        note_index = Signal(3, init=4)
         control_counter = Signal(range(self.control_period_samples))
-        note_increments = Array(Const(value, 32) for value in self._increments)
-        sampled_note_index = Signal(3)
-        triangle_folded = Signal(16)
-        triangle_full = Signal(signed(16))
-        triangle_quiet = Signal(signed(16))
+        balance_control_divider = Signal(2)
+        note_increments = [
+            Array(Const(value, 32) for value in voice_increments)
+            for voice_increments in self._increments
+        ]
+        sampled_note_indices = [Signal(3) for _ in range(4)]
+        normalized_inhibition = Signal(10)
 
-        # Eight spikes per scale step covers the useful 0..63 unsaturated
-        # population-activity range of the 1024-neuron E/I fixture. Clamp
-        # larger bursts to the top note instead of wrapping the scale.
+        # The population-study fixture measures roughly 23..64 excitatory and
+        # 8..22 inhibitory spikes per sample under low/high drive. Independent
+        # offsets and steps keep each voice mobile across that useful range.
+        # The fourth voice compares I*3 with E, correcting the ring's 3:1
+        # population-size bias before selecting a bass register.
         m.d.comb += [
-            sampled_note_index.eq(Mux(
-                self.spike_count >= 56,
+            normalized_inhibition.eq(
+                (self.inhibitory_spike_count << 1)
+                + self.inhibitory_spike_count
+            ),
+            sampled_note_indices[0].eq(Mux(
+                self.spike_count >= 112,
                 7,
-                self.spike_count >> 3,
+                self.spike_count >> 4,
             )),
-            triangle_folded.eq(Mux(
-                phase[31],
-                ~phase[15:31],
-                phase[15:31],
+            sampled_note_indices[1].eq(Mux(
+                self.excitatory_spike_count >= 72,
+                7,
+                Mux(
+                    self.excitatory_spike_count <= 16,
+                    0,
+                    (self.excitatory_spike_count - 16) >> 3,
+                ),
             )),
-            triangle_full.eq(triangle_folded ^ Const(0x8000, 16)),
-            # Half scale is about 4.096 V peak in calibrated ASQ units. This
-            # remains below the older raw-spike peaks while leaving clear
-            # headroom above the physical fixture's noise floor.
-            triangle_quiet.eq(triangle_full >> 1),
+            sampled_note_indices[2].eq(Mux(
+                self.inhibitory_spike_count >= 28,
+                7,
+                self.inhibitory_spike_count >> 2,
+            )),
+            sampled_note_indices[3].eq(Mux(
+                normalized_inhibition >= self.excitatory_spike_count + 8,
+                4,
+                Mux(
+                    normalized_inhibition >= self.excitatory_spike_count + 2,
+                    3,
+                    Mux(
+                        self.excitatory_spike_count >= normalized_inhibition + 8,
+                        0,
+                        Mux(
+                            self.excitatory_spike_count
+                            >= normalized_inhibition + 2,
+                            1,
+                            2,
+                        ),
+                    ),
+                ),
+            )),
             self.o.valid.eq(self.i.valid),
             self.i.ready.eq(self.o.ready),
-            self.o.payload[0].as_value().eq(triangle_quiet),
-            self.o.payload[1].eq(self.i.payload[1]),
-            self.o.payload[2].eq(self.i.payload[2]),
-            self.o.payload[3].eq(self.i.payload[3]),
-            self.phase.eq(phase),
-            self.note_index.eq(note_index),
         ]
 
+        for channel, phase in enumerate(self.phases):
+            triangle_folded = Signal(16)
+            triangle_full = Signal(signed(16))
+            triangle_quiet = Signal(signed(16))
+            m.d.comb += [
+                triangle_folded.eq(Mux(
+                    phase[31],
+                    ~phase[15:31],
+                    phase[15:31],
+                )),
+                triangle_full.eq(triangle_folded ^ Const(0x8000, 16)),
+                # Half scale is about 4.096 V peak in calibrated ASQ units.
+                # Give the inhibitory voice 9/16 scale because it represents
+                # one third as many neurons and otherwise recedes too far when
+                # the four physical outputs are monitored at equal gain.
+                triangle_quiet.eq(
+                    (triangle_full >> 1) + (
+                        (triangle_full >> 4) if channel == 2 else 0
+                    )
+                ),
+                self.o.payload[channel].as_value().eq(triangle_quiet),
+            ]
+
         with m.If(self.i.valid & self.o.ready):
-            m.d.sync += phase.eq(phase + note_increments[note_index])
+            for phase, note_index, increments in zip(
+                self.phases, self.note_indices, note_increments
+            ):
+                m.d.sync += phase.eq(phase + increments[note_index])
             with m.If(control_counter == self.control_period_samples - 1):
-                m.d.sync += [
-                    control_counter.eq(0),
-                    note_index.eq(sampled_note_index),
-                ]
+                m.d.sync += control_counter.eq(0)
+                for note_index, sampled_note_index in zip(
+                    self.note_indices[:3], sampled_note_indices[:3]
+                ):
+                    m.d.sync += note_index.eq(sampled_note_index)
+                with m.If(balance_control_divider == 3):
+                    m.d.sync += [
+                        balance_control_divider.eq(0),
+                        self.note_indices[3].eq(sampled_note_indices[3]),
+                    ]
+                with m.Else():
+                    m.d.sync += balance_control_divider.eq(
+                        balance_control_divider + 1
+                    )
             with m.Else():
                 m.d.sync += control_counter.eq(control_counter + 1)
 
@@ -866,6 +938,8 @@ class MemoryBatchedLIFBank(wiring.Component):
             init=initial_levels,
         )
         self.spike_count = Signal(range(logical_neuron_count + 1))
+        self.excitatory_spike_count = Signal(range(769))
+        self.inhibitory_spike_count = Signal(range(257))
         self.sample_index = Signal(32)
         self.leak_mode = Signal(2, init=1)
         self.recurrent_mode = Signal(2, init=1)
@@ -1094,14 +1168,36 @@ class MemoryBatchedLIFBank(wiring.Component):
         # video shadow use two bits without changing any of the four audio
         # outputs or the neural state itself.
         batch_spike_count = Signal(range(self.physical_lane_count + 1))
+        batch_excitatory_spike_count = Signal(range(25))
+        batch_inhibitory_spike_count = Signal(range(9))
         batch_membrane_sum = Signal(range(self.physical_lane_count * 15 + 1))
         sample_spike_accumulator = Signal(range(self.neuron_count + 1))
+        sample_excitatory_spike_accumulator = Signal(range(769))
+        sample_inhibitory_spike_accumulator = Signal(range(257))
         sample_membrane_accumulator = Signal(range(self.neuron_count * 15 + 1))
         registered_batch_spike_count = Signal.like(batch_spike_count)
+        registered_batch_excitatory_spike_count = Signal.like(
+            batch_excitatory_spike_count
+        )
+        registered_batch_inhibitory_spike_count = Signal.like(
+            batch_inhibitory_spike_count
+        )
         registered_batch_membrane_sum = Signal.like(batch_membrane_sum)
         accumulated_final_batch = Signal()
         m.d.comb += [
-            batch_spike_count.eq(balanced_sum(next_lane_spikes)),
+            batch_excitatory_spike_count.eq(balanced_sum([
+                spike
+                for lane, spike in enumerate(next_lane_spikes)
+                if lane % 4 != 3
+            ])),
+            batch_inhibitory_spike_count.eq(balanced_sum([
+                spike
+                for lane, spike in enumerate(next_lane_spikes)
+                if lane % 4 == 3
+            ])),
+            batch_spike_count.eq(
+                batch_excitatory_spike_count + batch_inhibitory_spike_count
+            ),
             batch_membrane_sum.eq(balanced_sum([
                 membrane[12:16] for membrane in next_lane_membranes
             ])),
@@ -1235,6 +1331,12 @@ class MemoryBatchedLIFBank(wiring.Component):
                         pending_accumulate.eq(1),
                         accumulated_final_batch.eq(1),
                         registered_batch_spike_count.eq(batch_spike_count),
+                        registered_batch_excitatory_spike_count.eq(
+                            batch_excitatory_spike_count
+                        ),
+                        registered_batch_inhibitory_spike_count.eq(
+                            batch_inhibitory_spike_count
+                        ),
                         registered_batch_membrane_sum.eq(batch_membrane_sum),
                     ]
                 elif self.neuron_count == 1024:
@@ -1262,6 +1364,12 @@ class MemoryBatchedLIFBank(wiring.Component):
                         pending_accumulate.eq(1),
                         accumulated_final_batch.eq(0),
                         registered_batch_spike_count.eq(batch_spike_count),
+                        registered_batch_excitatory_spike_count.eq(
+                            batch_excitatory_spike_count
+                        ),
+                        registered_batch_inhibitory_spike_count.eq(
+                            batch_inhibitory_spike_count
+                        ),
                         registered_batch_membrane_sum.eq(batch_membrane_sum),
                     ]
                 elif self.neuron_count == 1024:
@@ -1281,6 +1389,14 @@ class MemoryBatchedLIFBank(wiring.Component):
                     self.spike_count.eq(
                         sample_spike_accumulator + registered_batch_spike_count
                     ),
+                    self.excitatory_spike_count.eq(
+                        sample_excitatory_spike_accumulator
+                        + registered_batch_excitatory_spike_count
+                    ),
+                    self.inhibitory_spike_count.eq(
+                        sample_inhibitory_spike_accumulator
+                        + registered_batch_inhibitory_spike_count
+                    ),
                     membrane_mean.eq(
                         (
                             sample_membrane_accumulator
@@ -1293,6 +1409,14 @@ class MemoryBatchedLIFBank(wiring.Component):
                     pending_read.eq(1),
                     sample_spike_accumulator.eq(
                         sample_spike_accumulator + registered_batch_spike_count
+                    ),
+                    sample_excitatory_spike_accumulator.eq(
+                        sample_excitatory_spike_accumulator
+                        + registered_batch_excitatory_spike_count
+                    ),
+                    sample_inhibitory_spike_accumulator.eq(
+                        sample_inhibitory_spike_accumulator
+                        + registered_batch_inhibitory_spike_count
                     ),
                     sample_membrane_accumulator.eq(
                         sample_membrane_accumulator
@@ -1364,6 +1488,8 @@ class MemoryBatchedLIFBank(wiring.Component):
                     pending_read.eq(1),
                     batch_index.eq(0),
                     sample_spike_accumulator.eq(0),
+                    sample_excitatory_spike_accumulator.eq(0),
+                    sample_inhibitory_spike_accumulator.eq(0),
                     sample_membrane_accumulator.eq(0),
                     input_drive.eq(next_input_drive),
                     recurrent_drive.eq(next_recurrent_drive),

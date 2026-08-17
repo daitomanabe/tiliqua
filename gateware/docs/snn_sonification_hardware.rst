@@ -1,6 +1,11 @@
 Tutorial 18: E/I SNNを音高として聴く
 ======================================
 
+.. note::
+
+   この章は最初のOUT 0単音sonificationを記録しています。現在の ``--sonification`` profileは4出力を使う
+   ensembleへ発展しました。現行のmappingと実機結果は :doc:`snn_four_voice_ensemble_hardware` を参照してください。
+
 Tutorial 16のE/I SNNでOUT 0へ出していた信号は、population spike countを振幅にし、sampleごとに正負を反転する
 診断用pulseです。集合発火のrangeやRMSを測るには便利ですが、carrierがNyquist近傍なので聴感上はnoiseに近くなります。
 ここでは神経計算とDVI、OUT 1--3を変えず、OUT 0だけを明確な音高へ変換する任意sonification profileを追加します。

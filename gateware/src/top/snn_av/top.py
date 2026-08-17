@@ -19,7 +19,7 @@ from tiliqua.dsp.snn import (
     BatchedLIFBank,
     MemoryBatchedLIFBank,
     ParallelLIFBank,
-    PopulationToneMapper,
+    PopulationEnsembleSonifier,
     SNNTestSource,
 )
 from tiliqua.dsp.stream_util import SyncFIFOBuffered
@@ -124,15 +124,20 @@ class SNNAVTop(Elaboratable):
         if ei_ring:
             architecture_brief = f"{architecture_brief} E/I ring"
         if sonification:
-            architecture_brief = "1024-neuron 32-lane E/I spiking AV sonifier"
+            architecture_brief = "1024-neuron E/I 4-voice AV ensemble"
+        output_labels = (
+            [
+                "total activity tone", "excitatory voice",
+                "inhibitory voice", "E/I balance bass",
+            ]
+            if sonification else
+            ["spike audio", "population activity", "burst gate", "mean membrane"]
+        )
         self.bitstream_help = BitstreamHelp(
             brief=architecture_brief,
             io_left=[
                 "network drive", "leak control", "recurrence control",
-                "threshold control", (
-                    "SNN pentatonic tone" if sonification else "spike audio"
-                ), "population activity",
-                "burst gate", "mean membrane",
+                "threshold control", *output_labels,
             ],
             io_right=[
                 "", "", (
@@ -148,9 +153,7 @@ class SNNAVTop(Elaboratable):
                 brief=f"{architecture_brief} self-test",
                 io_left=[
                     "unused", "unused", "unused", "unused",
-                    (
-                        "SNN pentatonic tone" if sonification else "spike audio"
-                    ), "population activity", "burst gate", "mean membrane",
+                    *output_labels,
                 ],
                 io_right=[
                     "", "",
@@ -201,11 +204,19 @@ class SNNAVTop(Elaboratable):
             wiring.connect(m, pmod0.o_cal, core.i)
             m.d.comb += self.test_sample_index.eq(core.sample_index)
         if self.sonification:
-            m.submodules.sonifier = sonifier = PopulationToneMapper(
+            m.submodules.sonifier = sonifier = PopulationEnsembleSonifier(
                 neuron_count=self.neuron_count,
                 sample_rate=self.clock_settings.audio_clock.fs(),
             )
-            m.d.comb += sonifier.spike_count.eq(core.spike_count)
+            m.d.comb += [
+                sonifier.spike_count.eq(core.spike_count),
+                sonifier.excitatory_spike_count.eq(
+                    core.excitatory_spike_count
+                ),
+                sonifier.inhibitory_spike_count.eq(
+                    core.inhibitory_spike_count
+                ),
+            ]
             wiring.connect(m, core.o, sonifier.i)
             wiring.connect(m, sonifier.o, pmod0.i_cal)
         else:

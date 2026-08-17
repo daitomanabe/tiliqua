@@ -518,9 +518,9 @@ def ei_ring(args: argparse.Namespace) -> None:
 def sonification_report(args: argparse.Namespace) -> None:
     """Enforce the R5 QoR contract for the live pitched-output profile."""
 
-    print("\n1024-neuron E/I pentatonic sonification live profile")
+    print("\n1024-neuron E/I four-voice sonification live profile")
     evaluate_bitstream(
-        ROOT / "build" / f"snn-av-1024x32-ei-sonify-live-{args.hw}",
+        ROOT / "build" / f"snn-av-1024x32-ei-ensemble-live-{args.hw}",
         SONIFICATION_LIVE_SYNTHESIS_CONTRACT,
     )
 
@@ -541,21 +541,32 @@ def sonification(args: argparse.Namespace) -> None:
         "--physical-lanes", "32",
         "--ei-ring",
         "--sonification",
-        "--name", "SNN-AV-1024X32-EI-SONIFY-LAB",
+        "--name", "SNN-AV-1024X32-EI-ENSEMBLE-LAB",
     ])
     failures = load_and_report()
     metrics = json.loads(METRICS.read_text())
-    tone = metrics["audio"][0]
-    if not 8 <= tone["zero_crossings"] <= 64:
-        failures.append(
-            "audio 0 zero crossings do not describe a low-frequency pitched tone"
-        )
-    if not 6_000.0 <= tone["mean_abs"] <= 9_000.0:
-        failures.append("audio 0 mean amplitude is outside the conservative tone range")
+    tones = metrics["audio"]
+    crossing_ranges = ((10, 18), (22, 32), (16, 24), (7, 14))
+    for channel, (tone, (minimum, maximum)) in enumerate(
+        zip(tones, crossing_ranges)
+    ):
+        if not minimum <= tone["zero_crossings"] <= maximum:
+            failures.append(
+                f"audio {channel} zero crossings do not match its voice register"
+            )
+        if not 6_000.0 <= tone["mean_abs"] <= 9_000.0:
+            failures.append(
+                f"audio {channel} mean amplitude is outside the tone range"
+            )
+    if len({tone["zero_crossings"] for tone in tones}) != 4:
+        failures.append("the four output voices do not have distinct initial pitches")
     print("\nSNN sonification simulation contract")
     print(f"  result             {'PASS' if not failures else 'FAIL'}")
-    print(f"  zero crossings     {tone['zero_crossings']} / {tone['samples']} samples")
-    print(f"  mean absolute      {tone['mean_abs']:.1f}")
+    for channel, tone in enumerate(tones):
+        print(
+            f"  audio {channel}           {tone['zero_crossings']:2d} crossings / "
+            f"mean absolute {tone['mean_abs']:.1f}"
+        )
     for failure in failures:
         print(f"  failure            {failure}")
     if failures:
@@ -571,7 +582,7 @@ def sonification(args: argparse.Namespace) -> None:
         "--physical-lanes", "32",
         "--ei-ring",
         "--sonification",
-        "--name", "SNN-AV-1024X32-EI-SONIFY-LIVE",
+        "--name", "SNN-AV-1024X32-EI-ENSEMBLE-LIVE",
     ])
     sonification_report(args)
 

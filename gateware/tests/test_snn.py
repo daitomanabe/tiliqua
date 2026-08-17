@@ -11,7 +11,7 @@ from tiliqua.dsp.snn import (
     BatchedLIFBank,
     MemoryBatchedLIFBank,
     ParallelLIFBank,
-    PopulationToneMapper,
+    PopulationEnsembleSonifier,
     SNNTestSource,
 )
 from tiliqua.dsp.synth import midi_note_phase_increment
@@ -127,10 +127,10 @@ class SNNVisualizerTests(unittest.TestCase):
         sim.run()
 
 
-class PopulationToneMapperTests(unittest.TestCase):
+class PopulationEnsembleSonifierTests(unittest.TestCase):
 
-    def test_pentatonic_pitch_is_bounded_and_backpressure_safe(self):
-        dut = PopulationToneMapper(
+    def test_four_population_voices_are_bounded_and_backpressure_safe(self):
+        dut = PopulationEnsembleSonifier(
             neuron_count=1024,
             sample_rate=48_000,
             control_period_samples=4,
@@ -141,47 +141,70 @@ class PopulationToneMapperTests(unittest.TestCase):
             ctx.set(dut.i.valid, 1)
             ctx.set(dut.o.ready, 1)
             ctx.set(dut.spike_count, 40)
-            ctx.set(dut.i.payload[0].as_value(), 31_000)
-            ctx.set(dut.i.payload[1].as_value(), 1234)
-            ctx.set(dut.i.payload[2].as_value(), 2345)
-            ctx.set(dut.i.payload[3].as_value(), 3456)
+            ctx.set(dut.excitatory_spike_count, 32)
+            ctx.set(dut.inhibitory_spike_count, 8)
 
-            for _ in range(5):
-                samples.append(ctx.get(dut.o.payload[0].as_value()))
-                self.assertEqual(ctx.get(dut.o.payload[1].as_value()), 1234)
-                self.assertEqual(ctx.get(dut.o.payload[2].as_value()), 2345)
-                self.assertEqual(ctx.get(dut.o.payload[3].as_value()), 3456)
+            for _ in range(17):
+                samples.append(tuple(
+                    ctx.get(dut.o.payload[channel].as_value())
+                    for channel in range(4)
+                ))
                 await ctx.tick()
 
-            # 40 spikes selects scale degree 5 after the four-sample control
-            # period. The new increment takes effect on the following sample.
-            self.assertEqual(ctx.get(dut.note_index), 5)
-            phase_before_stall = ctx.get(dut.phase)
-            sample_before_stall = ctx.get(dut.o.payload[0].as_value())
+            # Total, E, and I update every control interval. The bass updates
+            # every fourth interval; 32 versus 3*8 is strongly excitatory.
+            self.assertEqual(
+                tuple(ctx.get(note_index) for note_index in dut.note_indices),
+                (2, 2, 2, 0),
+            )
+            phases_before_stall = tuple(ctx.get(phase) for phase in dut.phases)
+            samples_before_stall = tuple(
+                ctx.get(dut.o.payload[channel].as_value())
+                for channel in range(4)
+            )
             ctx.set(dut.o.ready, 0)
             for _ in range(4):
                 await ctx.tick()
-                self.assertEqual(ctx.get(dut.phase), phase_before_stall)
                 self.assertEqual(
-                    ctx.get(dut.o.payload[0].as_value()), sample_before_stall
+                    tuple(ctx.get(phase) for phase in dut.phases),
+                    phases_before_stall,
+                )
+                self.assertEqual(
+                    tuple(
+                        ctx.get(dut.o.payload[channel].as_value())
+                        for channel in range(4)
+                    ),
+                    samples_before_stall,
                 )
 
             ctx.set(dut.o.ready, 1)
             await ctx.tick()
-            expected_increment = midi_note_phase_increment(48, 48_000)
             self.assertEqual(
-                ctx.get(dut.phase),
-                (phase_before_stall + expected_increment) & 0xFFFFFFFF,
+                tuple(ctx.get(phase) for phase in dut.phases),
+                tuple(
+                    (phase + midi_note_phase_increment(note, 48_000))
+                    & 0xFFFFFFFF
+                    for phase, note in zip(
+                        phases_before_stall,
+                        (41, 53, 48, 24),
+                    )
+                ),
             )
 
         sim = Simulator(dut)
         sim.add_clock(1e-6)
         sim.add_testbench(bench)
         sim.run()
-        self.assertTrue(all(-16384 <= sample <= 16383 for sample in samples))
+        limits = (16384, 16384, 18432, 16384)
+        self.assertTrue(all(
+            -limits[channel] <= sample <= limits[channel] - 1
+            for row in samples
+            for channel, sample in enumerate(row)
+        ))
+        self.assertTrue(any(len(set(row)) > 1 for row in samples))
 
-    def test_spike_count_clamps_to_top_note(self):
-        dut = PopulationToneMapper(
+    def test_population_counts_clamp_without_wrapping(self):
+        dut = PopulationEnsembleSonifier(
             neuron_count=1024,
             control_period_samples=2,
         )
@@ -190,9 +213,14 @@ class PopulationToneMapperTests(unittest.TestCase):
             ctx.set(dut.i.valid, 1)
             ctx.set(dut.o.ready, 1)
             ctx.set(dut.spike_count, 1024)
+            ctx.set(dut.excitatory_spike_count, 768)
+            ctx.set(dut.inhibitory_spike_count, 256)
             for _ in range(3):
                 await ctx.tick()
-            self.assertEqual(ctx.get(dut.note_index), 7)
+            self.assertEqual(
+                tuple(ctx.get(note_index) for note_index in dut.note_indices),
+                (7, 7, 7, 2),
+            )
 
         sim = Simulator(dut)
         sim.add_clock(1e-6)
@@ -468,6 +496,46 @@ class ParallelLIFBankTests(unittest.TestCase):
         )
         self.assertNotEqual(profiles[1024], baseline)
         self.assertEqual(len({repr(profile) for profile in profiles.values()}), 3)
+
+    def test_1024_ei_population_counters_match_spike_vector(self):
+        dut = MemoryBatchedLIFBank(
+            logical_neuron_count=1024,
+            physical_lane_count=32,
+            ei_ring=True,
+        )
+        checked = 0
+        inhibitory_mask = sum(1 << index for index in range(3, 1024, 4))
+
+        async def bench(ctx):
+            nonlocal checked
+            ctx.set(dut.i.valid, 1)
+            ctx.set(dut.i.payload[0].as_value(), 12_000)
+            for channel in range(1, 4):
+                ctx.set(dut.i.payload[channel].as_value(), 0)
+            ctx.set(dut.o.ready, 1)
+            while checked < 8:
+                if ctx.get(dut.o.valid):
+                    spikes = ctx.get(dut.spike_vector)
+                    inhibitory = (spikes & inhibitory_mask).bit_count()
+                    excitatory = spikes.bit_count() - inhibitory
+                    self.assertEqual(
+                        ctx.get(dut.excitatory_spike_count), excitatory
+                    )
+                    self.assertEqual(
+                        ctx.get(dut.inhibitory_spike_count), inhibitory
+                    )
+                    self.assertEqual(
+                        excitatory + inhibitory,
+                        ctx.get(dut.spike_count),
+                    )
+                    checked += 1
+                await ctx.tick()
+
+        sim = Simulator(dut)
+        sim.add_clock(1e-6)
+        sim.add_testbench(bench)
+        sim.run()
+        self.assertEqual(checked, 8)
 
     def test_three_cv_controls_change_population_activity(self):
         weak_leak = self.mean_activity(1, -8_000)

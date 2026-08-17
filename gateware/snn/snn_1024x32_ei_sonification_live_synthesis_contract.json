@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "profile": "snn_av_1024_logical_32_lane_ei_sonification_live_r5_v1",
+  "profile": "snn_av_1024_logical_32_lane_ei_four_voice_ensemble_live_r5_v2",
   "resources": {
     "LUT4": {"maximum": 6200},
     "TRELLIS_FF": {"maximum": 5600},
