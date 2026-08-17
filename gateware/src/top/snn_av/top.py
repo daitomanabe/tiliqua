@@ -19,6 +19,7 @@ from tiliqua.dsp.snn import (
     BatchedLIFBank,
     MemoryBatchedLIFBank,
     ParallelLIFBank,
+    PopulationCVConductor,
     PopulationEnsembleSonifier,
     SNNTestSource,
 )
@@ -44,7 +45,7 @@ class SNNAVTop(Elaboratable):
     def __init__(
         self, *, clock_settings, self_test=False, neuron_count=64,
         physical_lane_count=None, ei_ring=False, inhibitory_strength=1024,
-        sonification=False,
+        sonification=False, cv_output=False,
     ):
         if clock_settings.modeline is None:
             raise ValueError("snn_av requires a fixed video mode")
@@ -62,6 +63,14 @@ class SNNAVTop(Elaboratable):
             raise ValueError(
                 "sonification requires the 1024-neuron 32-lane E/I ring profile"
             )
+        if cv_output and not (
+            neuron_count == 1024 and physical_lane_count == 32 and ei_ring
+        ):
+            raise ValueError(
+                "CV output requires the 1024-neuron 32-lane E/I ring profile"
+            )
+        if sonification and cv_output:
+            raise ValueError("sonification and CV output are mutually exclusive")
         if physical_lane_count is not None:
             valid_batched = (
                 neuron_count == 256
@@ -80,6 +89,7 @@ class SNNAVTop(Elaboratable):
         self.ei_ring = ei_ring
         self.inhibitory_strength = inhibitory_strength
         self.sonification = sonification
+        self.cv_output = cv_output
         self.pmod0 = eurorack_pmod.EurorackPmod(clock_settings.audio_clock)
         if neuron_count in (512, 1024):
             if physical_lane_count != 32:
@@ -112,6 +122,7 @@ class SNNAVTop(Elaboratable):
         self.video_g = Signal(8)
         self.video_b = Signal(8)
         self.self_test_active = Signal(init=int(self_test))
+        self.cv_output_active = Signal(init=int(cv_output))
         self.test_phase = Signal(32)
         self.test_sample_index = Signal(32)
         self.sim_regression_name = "SNN-AV"
@@ -125,13 +136,18 @@ class SNNAVTop(Elaboratable):
             architecture_brief = f"{architecture_brief} E/I ring"
         if sonification:
             architecture_brief = "1024-neuron E/I 4-voice AV ensemble"
+        if cv_output:
+            architecture_brief = "1024-neuron E/I CV conductor"
         output_labels = (
             [
                 "total activity tone", "excitatory voice",
                 "inhibitory voice", "E/I balance bass",
             ]
-            if sonification else
-            ["spike audio", "population activity", "burst gate", "mean membrane"]
+            if sonification else (
+                ["master clock", "quantized pitch", "density gate", "activity mod"]
+                if cv_output else
+                ["spike audio", "population activity", "burst gate", "mean membrane"]
+            )
         )
         self.bitstream_help = BitstreamHelp(
             brief=architecture_brief,
@@ -189,6 +205,7 @@ class SNNAVTop(Elaboratable):
         m.submodules.visualizer = visualizer = self.visualizer
         m.d.comb += [
             self.self_test_active.eq(self.self_test),
+            self.cv_output_active.eq(self.cv_output),
             self.test_phase.eq(core.spike_vector[:32]),
         ]
 
@@ -203,7 +220,22 @@ class SNNAVTop(Elaboratable):
         else:
             wiring.connect(m, pmod0.o_cal, core.i)
             m.d.comb += self.test_sample_index.eq(core.sample_index)
-        if self.sonification:
+        if self.cv_output:
+            m.submodules.cv_conductor = cv_conductor = PopulationCVConductor(
+                neuron_count=self.neuron_count,
+                sample_rate=self.clock_settings.audio_clock.fs(),
+                clock_period_samples=512 if self.self_test else 6000,
+                clock_pulse_samples=32 if self.self_test else 480,
+                gate_high_samples=256 if self.self_test else 3000,
+                wall_clock_hz=(
+                    None if self.self_test
+                    else int(self.clock_settings.frequencies.sync)
+                ),
+            )
+            m.d.comb += cv_conductor.spike_count.eq(core.spike_count)
+            wiring.connect(m, core.o, cv_conductor.i)
+            wiring.connect(m, cv_conductor.o, pmod0.i_cal)
+        elif self.sonification:
             m.submodules.sonifier = sonifier = PopulationEnsembleSonifier(
                 neuron_count=self.neuron_count,
                 sample_rate=self.clock_settings.audio_clock.fs(),
@@ -383,6 +415,7 @@ def simulation_ports(fragment):
         "dvi_g": (fragment.video_g, None),
         "dvi_b": (fragment.video_b, None),
         "self_test_active": (fragment.self_test_active, None),
+        "cv_output_active": (fragment.cv_output_active, None),
         "test_phase": (fragment.test_phase, None),
         "test_sample_index": (fragment.test_sample_index, None),
     }
@@ -392,6 +425,7 @@ def argparse_callback(parser):
     parser.add_argument("--self-test", action="store_true")
     parser.add_argument("--ei-ring", action="store_true")
     parser.add_argument("--sonification", action="store_true")
+    parser.add_argument("--cv-output", action="store_true")
     parser.add_argument(
         "--inhibitory-strength",
         type=int,
@@ -405,6 +439,7 @@ def argparse_callback(parser):
 
 
 def argparse_fragment(args):
+    default_name = args.name == "SNN-AV"
     if args.name == "SNN-AV":
         if args.physical_lanes is not None:
             memory_suffix = "-MEM" if args.neurons in (512, 1024) else ""
@@ -421,6 +456,8 @@ def argparse_fragment(args):
             )
         elif args.neurons != 64:
             args.name = f"SNN-AV-{args.neurons}"
+    if default_name and args.cv_output:
+        args.name = f"{args.name}-CV"
     return {
         "self_test": args.self_test,
         "neuron_count": args.neurons,
@@ -428,6 +465,7 @@ def argparse_fragment(args):
         "ei_ring": args.ei_ring,
         "inhibitory_strength": args.inhibitory_strength,
         "sonification": args.sonification,
+        "cv_output": args.cv_output,
     }
 
 

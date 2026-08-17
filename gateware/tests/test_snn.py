@@ -11,6 +11,7 @@ from tiliqua.dsp.snn import (
     BatchedLIFBank,
     MemoryBatchedLIFBank,
     ParallelLIFBank,
+    PopulationCVConductor,
     PopulationEnsembleSonifier,
     SNNTestSource,
 )
@@ -221,6 +222,125 @@ class PopulationEnsembleSonifierTests(unittest.TestCase):
                 tuple(ctx.get(note_index) for note_index in dut.note_indices),
                 (7, 7, 7, 2),
             )
+
+        sim = Simulator(dut)
+        sim.add_clock(1e-6)
+        sim.add_testbench(bench)
+        sim.run()
+
+
+class PopulationCVConductorTests(unittest.TestCase):
+
+    def test_four_cv_outputs_are_bounded_quantized_and_backpressure_safe(self):
+        dut = PopulationCVConductor(
+            neuron_count=1024,
+            sample_rate=48_000,
+            clock_period_samples=16,
+            clock_pulse_samples=2,
+            gate_high_samples=8,
+        )
+        samples = []
+
+        async def bench(ctx):
+            ctx.set(dut.i.valid, 1)
+            ctx.set(dut.o.ready, 1)
+            ctx.set(dut.spike_count, 64)
+            for _ in range(70):
+                samples.append(tuple(
+                    ctx.get(dut.o.payload[channel].as_value())
+                    for channel in range(4)
+                ))
+                await ctx.tick()
+
+            state_before_stall = (
+                ctx.get(dut.clock_counter),
+                ctx.get(dut.step),
+                ctx.get(dut.pitch_index),
+                ctx.get(dut.gate_remaining),
+                ctx.get(dut.modulation_cv),
+            )
+            output_before_stall = tuple(
+                ctx.get(dut.o.payload[channel].as_value())
+                for channel in range(4)
+            )
+            ctx.set(dut.o.ready, 0)
+            for _ in range(8):
+                await ctx.tick()
+                self.assertEqual(
+                    (
+                        ctx.get(dut.clock_counter),
+                        ctx.get(dut.step),
+                        ctx.get(dut.pitch_index),
+                        ctx.get(dut.gate_remaining),
+                        ctx.get(dut.modulation_cv),
+                    ),
+                    state_before_stall,
+                )
+                self.assertEqual(
+                    tuple(
+                        ctx.get(dut.o.payload[channel].as_value())
+                        for channel in range(4)
+                    ),
+                    output_before_stall,
+                )
+
+        sim = Simulator(dut)
+        sim.add_clock(1e-6)
+        sim.add_testbench(bench)
+        sim.run()
+
+        five_volts = 20_000
+        self.assertEqual(set(row[0] for row in samples), {0, five_volts})
+        self.assertTrue(set(row[1] for row in samples).issubset(
+            set(PopulationCVConductor.PITCH_ASQ)
+        ))
+        self.assertIn(PopulationCVConductor.PITCH_ASQ[4], [
+            row[1] for row in samples
+        ])
+        self.assertEqual(set(row[2] for row in samples), {0, five_volts})
+        self.assertTrue(all(0 <= row[3] <= five_volts for row in samples))
+        self.assertGreater(samples[-1][3], samples[0][3])
+
+    def test_population_extremes_clamp_pitch_density_and_modulation(self):
+        dut = PopulationCVConductor(
+            clock_period_samples=16,
+            clock_pulse_samples=2,
+            gate_high_samples=8,
+        )
+
+        async def bench(ctx):
+            ctx.set(dut.i.valid, 1)
+            ctx.set(dut.o.ready, 1)
+            ctx.set(dut.spike_count, 1024)
+            for _ in range(16 * 3):
+                await ctx.tick()
+            self.assertEqual(ctx.get(dut.pitch_index), 7)
+            self.assertLessEqual(ctx.get(dut.modulation_cv), 20_000)
+
+        sim = Simulator(dut)
+        sim.add_clock(1e-6)
+        sim.add_testbench(bench)
+        sim.run()
+
+    def test_hardware_clock_keeps_running_during_stream_backpressure(self):
+        dut = PopulationCVConductor(
+            clock_period_samples=16,
+            clock_pulse_samples=2,
+            gate_high_samples=8,
+            wall_clock_hz=800,
+        )
+
+        async def bench(ctx):
+            ctx.set(dut.i.valid, 1)
+            ctx.set(dut.o.ready, 0)
+            ctx.set(dut.spike_count, 64)
+            modulation_before = ctx.get(dut.modulation_cv)
+            for _ in range(101):
+                await ctx.tick()
+            self.assertEqual(ctx.get(dut.clock_counter), 1)
+            self.assertEqual(ctx.get(dut.step), 1)
+            self.assertEqual(ctx.get(dut.modulation_cv), modulation_before)
+            self.assertEqual(ctx.get(dut.o.payload[0].as_value()), 20_000)
 
         sim = Simulator(dut)
         sim.add_clock(1e-6)

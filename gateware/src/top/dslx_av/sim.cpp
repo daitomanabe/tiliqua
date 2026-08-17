@@ -169,10 +169,19 @@ int main(int argc, char** argv) {
     if (top.self_test_active) {
         passed &= top.test_sample_index > 2000;
         passed &= audio[0].samples > 1000;
-        passed &= audio[0].minimum < -8000 && audio[0].maximum > 8000;
-        passed &= audio[1].maximum > 3000;
-        passed &= audio[2].minimum < 1000 && audio[2].maximum > 15000;
-        passed &= audio[3].maximum > 8000;
+        if (top.cv_output_active) {
+            passed &= audio[0].minimum >= -500 && audio[0].maximum > 15000;
+            passed &= audio[1].minimum >= -500 && audio[1].maximum > 1000;
+            passed &= audio[1].maximum <= 7000;
+            passed &= audio[2].minimum >= -500 && audio[2].maximum > 15000;
+            passed &= audio[3].minimum >= -500 && audio[3].maximum > 1000;
+            passed &= audio[3].maximum <= 21000;
+        } else {
+            passed &= audio[0].minimum < -8000 && audio[0].maximum > 8000;
+            passed &= audio[1].maximum > 3000;
+            passed &= audio[2].minimum < 1000 && audio[2].maximum > 15000;
+            passed &= audio[3].maximum > 8000;
+        }
     }
 
     FILE* metrics_file = std::fopen(METRICS_FILENAME, "w");
@@ -185,6 +194,7 @@ int main(int argc, char** argv) {
         "{\n"
         "  \"pass\": %s,\n"
         "  \"self_test\": %s,\n"
+        "  \"cv_output\": %s,\n"
         "  \"test_sample_index\": %u,\n"
         "  \"test_phase\": %u,\n"
         "  \"dvi\": {\"frames\": %u, \"pixels\": %llu, "
@@ -193,6 +203,7 @@ int main(int argc, char** argv) {
         "  \"audio\": [\n",
         passed ? "true" : "false",
         top.self_test_active ? "true" : "false",
+        top.cv_output_active ? "true" : "false",
         top.test_sample_index,
         top.test_phase,
         dvi_driver.get_frame_count(),

@@ -201,6 +201,148 @@ class PopulationEnsembleSonifier(wiring.Component):
         return m
 
 
+class PopulationCVConductor(wiring.Component):
+    """Map SNN population state to four slow, unipolar modular CV outputs.
+
+    The four outputs form one shared conductor bus for a larger modular system:
+    an 8 Hz master clock, C-minor-pentatonic 1 V/oct pitch, a density-controlled
+    gate, and a smoothed population-activity modulation voltage. All channels
+    stay between 0 and +5 V. Pitch and modulation follow stream transfers;
+    hardware clock and gate timing use the stable sync-domain wall clock.
+    """
+
+    PITCH_VOLTS = (0.0, 0.25, 5 / 12, 7 / 12, 10 / 12, 1.0, 1.25, 17 / 12)
+    PITCH_ASQ = tuple(round(volts * 4000) for volts in PITCH_VOLTS)
+    FIVE_VOLTS_ASQ = 20_000
+    EUCLIDEAN_ORDER = (0, 8, 4, 12, 2, 10, 6, 14, 1, 9, 5, 13, 3, 11, 7, 15)
+
+    def __init__(
+        self, *, neuron_count=1024, sample_rate=48_000,
+        clock_period_samples=6000, clock_pulse_samples=480,
+        gate_high_samples=3000, wall_clock_hz=None,
+    ):
+        if neuron_count != 1024:
+            raise ValueError("population CV conductor requires 1024 neurons")
+        if sample_rate <= 0:
+            raise ValueError("sample_rate must be positive")
+        if clock_period_samples < 16:
+            raise ValueError("clock period must be at least 16 samples")
+        if not 1 <= clock_pulse_samples < clock_period_samples:
+            raise ValueError("clock pulse must fit inside one period")
+        if not 1 <= gate_high_samples <= clock_period_samples:
+            raise ValueError("gate high time must fit inside one period")
+        if wall_clock_hz is not None and wall_clock_hz < 800:
+            raise ValueError("wall clock must be at least 800 Hz")
+        self.neuron_count = neuron_count
+        self.sample_rate = sample_rate
+        self.wall_clock_hz = wall_clock_hz
+        if wall_clock_hz is None:
+            self.clock_period_ticks = clock_period_samples
+            self.clock_pulse_ticks = clock_pulse_samples
+            self.gate_high_ticks = gate_high_samples
+        else:
+            # Tempo must not follow SNN stream backpressure. Hardware uses the
+            # stable sync PLL for an exact 8 Hz clock, 10 ms trigger, and
+            # 62.5 ms density gate. The transfer-count mode remains available
+            # for compact simulations and stream-only unit tests.
+            self.clock_period_ticks = round(wall_clock_hz / 8)
+            self.clock_pulse_ticks = round(wall_clock_hz / 100)
+            self.gate_high_ticks = round(wall_clock_hz / 16)
+        self.clock_counter = Signal(range(self.clock_period_ticks))
+        self.step = Signal(4)
+        self.pitch_index = Signal(3, init=2)
+        self.gate_remaining = Signal(range(self.gate_high_ticks + 1))
+        self.modulation_cv = Signal(range(self.FIVE_VOLTS_ASQ + 1))
+        count_bits = (neuron_count + 1).bit_length()
+        super().__init__({
+            "i": In(stream.Signature(data.ArrayLayout(ASQ, 4))),
+            "spike_count": In(unsigned(count_bits)),
+            "o": Out(stream.Signature(data.ArrayLayout(ASQ, 4))),
+        })
+
+    def elaborate(self, platform):
+        m = Module()
+
+        pitch_values = Array(Const(value, signed(16)) for value in self.PITCH_ASQ)
+        pattern_values = Array(Const(value, 4) for value in self.EUCLIDEAN_ORDER)
+        next_pitch_index = Signal(3)
+        gate_density = Signal(4)
+        modulation_target_wide = Signal(18)
+        modulation_target = Signal(range(self.FIVE_VOLTS_ASQ + 1))
+        transfer = Signal()
+        five_volts = self.FIVE_VOLTS_ASQ
+
+        m.d.comb += [
+            transfer.eq(self.i.valid & self.o.ready),
+            self.o.valid.eq(self.i.valid),
+            self.i.ready.eq(self.o.ready),
+            next_pitch_index.eq(Mux(
+                self.spike_count >= 112,
+                7,
+                self.spike_count >> 4,
+            )),
+            gate_density.eq(Mux(
+                self.spike_count < 16,
+                2,
+                Mux(self.spike_count >= 96, 12, self.spike_count >> 3),
+            )),
+            modulation_target_wide.eq(self.spike_count << 7),
+            modulation_target.eq(Mux(
+                modulation_target_wide > five_volts,
+                five_volts,
+                modulation_target_wide,
+            )),
+            self.o.payload[0].as_value().eq(Mux(
+                self.clock_counter < self.clock_pulse_ticks,
+                five_volts,
+                0,
+            )),
+            self.o.payload[1].as_value().eq(pitch_values[self.pitch_index]),
+            self.o.payload[2].as_value().eq(Mux(
+                self.gate_remaining != 0,
+                five_volts,
+                0,
+            )),
+            self.o.payload[3].as_value().eq(self.modulation_cv),
+        ]
+
+        advance_clock = Const(1) if self.wall_clock_hz is not None else transfer
+        with m.If(advance_clock):
+            with m.If(self.clock_counter == self.clock_period_ticks - 1):
+                m.d.sync += [
+                    self.clock_counter.eq(0),
+                    self.step.eq(self.step + 1),
+                    self.pitch_index.eq(next_pitch_index),
+                    self.gate_remaining.eq(Mux(
+                        pattern_values[self.step] < gate_density,
+                        self.gate_high_ticks,
+                        0,
+                    )),
+                ]
+            with m.Else():
+                m.d.sync += self.clock_counter.eq(self.clock_counter + 1)
+                with m.If(self.gate_remaining != 0):
+                    m.d.sync += self.gate_remaining.eq(
+                        self.gate_remaining - 1
+                    )
+
+        with m.If(transfer):
+            with m.If(modulation_target > self.modulation_cv):
+                m.d.sync += self.modulation_cv.eq(
+                    self.modulation_cv
+                    + ((modulation_target - self.modulation_cv) >> 10)
+                    + 1
+                )
+            with m.Elif(modulation_target < self.modulation_cv):
+                m.d.sync += self.modulation_cv.eq(
+                    self.modulation_cv
+                    - ((self.modulation_cv - modulation_target) >> 10)
+                    - 1
+                )
+
+        return m
+
+
 class ParallelLIFBank(wiring.Component):
     """Update many integer LIF neurons in parallel for every audio sample.
 

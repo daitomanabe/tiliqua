@@ -55,6 +55,9 @@ EI_RING_LIVE_SYNTHESIS_CONTRACT = (
 SONIFICATION_LIVE_SYNTHESIS_CONTRACT = (
     ROOT / "snn" / "snn_1024x32_ei_sonification_live_synthesis_contract.json"
 )
+CV_LIVE_SYNTHESIS_CONTRACT = (
+    ROOT / "snn" / "snn_1024x32_ei_cv_live_synthesis_contract.json"
+)
 
 
 def run(command: list[str]) -> None:
@@ -80,6 +83,7 @@ def doctor(_: argparse.Namespace) -> None:
         EI_RING_SYNTHESIS_CONTRACT,
         EI_RING_LIVE_SYNTHESIS_CONTRACT,
         SONIFICATION_LIVE_SYNTHESIS_CONTRACT,
+        CV_LIVE_SYNTHESIS_CONTRACT,
     ]
     missing = [str(path.relative_to(ROOT)) for path in required if not path.is_file()]
     if missing:
@@ -93,6 +97,7 @@ def doctor(_: argparse.Namespace) -> None:
     print("  kiloneuron         1024 logical / 32 lanes / 49.152 M updates/s")
     print("  ei-ring            1024 logical / 32 lanes / 3:1 E/I ring")
     print("  sonification       E/I population -> C-minor pentatonic triangle")
+    print("  cv                  E/I population -> clock/pitch/gate/mod CV")
 
 
 def quick(_: argparse.Namespace) -> None:
@@ -587,6 +592,95 @@ def sonification(args: argparse.Namespace) -> None:
     sonification_report(args)
 
 
+def cv_report(args: argparse.Namespace) -> None:
+    """Enforce the R5 QoR contract for the live four-CV profile."""
+
+    print("\n1024-neuron E/I four-CV conductor live profile")
+    evaluate_bitstream(
+        ROOT / "build" / f"snn-av-1024x32-ei-cv-live-{args.hw}",
+        CV_LIVE_SYNTHESIS_CONTRACT,
+    )
+
+
+def cv(args: argparse.Namespace) -> None:
+    """Regress, simulate, and build the modular-CV output profile."""
+
+    quick(args)
+    METRICS.unlink(missing_ok=True)
+    run([
+        sys.executable,
+        "src/top/snn_av/top.py",
+        "sim",
+        "--hw", args.hw,
+        "--modeline", args.modeline,
+        "--self-test",
+        "--neurons", "1024",
+        "--physical-lanes", "32",
+        "--ei-ring",
+        "--cv-output",
+        "--name", "SNN-AV-1024X32-EI-CV-LAB",
+    ])
+    metrics = json.loads(METRICS.read_text())
+    failures = []
+    dvi = metrics["dvi"]
+    if (
+        not metrics.get("self_test")
+        or not metrics.get("cv_output")
+        or metrics["test_sample_index"] < 2000
+    ):
+        failures.append("self-test did not advance far enough")
+    if dvi["frames"] < 3 or dvi["pixels"] < 1_000_000:
+        failures.append("DVI simulation coverage is too short")
+    if any(dvi[channel][1] - dvi[channel][0] < 16 for channel in "rgb"):
+        failures.append("DVI RGB span is too small")
+
+    audio = metrics["audio"]
+    if not (-500 <= audio[0]["min"] <= 500 and audio[0]["max"] >= 15_000):
+        failures.append("clock does not contain calibrated low/high pulses")
+    if not (
+        -500 <= audio[1]["min"] <= audio[1]["max"] <= 7_000
+        and audio[1]["max"] - audio[1]["min"] > 1_000
+    ):
+        failures.append("pitch is not a changing bounded 1 V/oct CV")
+    if not (-500 <= audio[2]["min"] <= 500 and audio[2]["max"] >= 15_000):
+        failures.append("gate does not contain calibrated low/high states")
+    if not (
+        -500 <= audio[3]["min"] < audio[3]["max"] <= 21_000
+        and audio[3]["max"] - audio[3]["min"] >= 1_000
+    ):
+        failures.append("activity modulation does not span a useful safe range")
+
+    print("\nSNN four-CV simulation contract")
+    print(f"  result             {'PASS' if not failures else 'FAIL'}")
+    print(f"  neuron samples     {metrics['test_sample_index']}")
+    print(f"  DVI frames/pixels  {dvi['frames']} / {dvi['pixels']}")
+    print("  output             ch  min ASQ  max ASQ  role")
+    roles = ("8 Hz clock", "1 V/oct pitch", "density gate", "activity mod")
+    for entry, role in zip(audio, roles):
+        print(
+            f"                     {entry['channel']:>2}  "
+            f"{entry['min']:>7}  {entry['max']:>7}  {role}"
+        )
+    for failure in failures:
+        print(f"  failure            {failure}")
+    if failures:
+        raise SystemExit("four-CV simulation contract failed")
+
+    run([
+        sys.executable,
+        "src/top/snn_av/top.py",
+        "build",
+        "--hw", args.hw,
+        "--modeline", args.modeline,
+        "--neurons", "1024",
+        "--physical-lanes", "32",
+        "--ei-ring",
+        "--cv-output",
+        "--name", "SNN-AV-1024X32-EI-CV-LIVE",
+    ])
+    cv_report(args)
+
+
 def inhibition_study(args: argparse.Namespace) -> None:
     """Sweep three constant inhibitory strengths through AV simulation."""
 
@@ -852,6 +946,7 @@ def make_parser() -> argparse.ArgumentParser:
         "kiloneuron", "kiloneuron-report",
         "ei-ring", "ei-ring-report",
         "sonification", "sonification-report",
+        "cv", "cv-report",
         "inhibition-study",
         "inhibition-study-report",
         "population-study",
@@ -882,6 +977,8 @@ def main() -> None:
         "ei-ring-report": ei_ring_report,
         "sonification": sonification,
         "sonification-report": sonification_report,
+        "cv": cv,
+        "cv-report": cv_report,
         "inhibition-study": inhibition_study,
         "inhibition-study-report": inhibition_study_report,
         "population-study": population_study,
