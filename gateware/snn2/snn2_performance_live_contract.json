@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
-  "profile": "snn2_256x16_music_cv_v1_self_test",
-  "self_test": true,
+  "profile": "snn2_256x16_music_cv_v1_live",
+  "self_test": false,
   "performance": true,
   "dvi": {
     "minimum_frames": 4,
@@ -11,7 +11,7 @@
   "network": {
     "maximum_scheduler_cycles": 640,
     "minimum_excitatory_spikes": 1,
-    "minimum_inhibitory_spikes": 1,
+    "minimum_inhibitory_spikes": 0,
     "required_band_activity_mask": 255
   },
   "audio": {
@@ -31,7 +31,7 @@
       "minimum_peak": 1000,
       "minimum_floor": 0,
       "maximum_peak": 6000,
-      "minimum_nonzero_samples": 1000
+      "minimum_nonzero_samples": 100
     },
     "3": {
       "minimum_peak": 17000,

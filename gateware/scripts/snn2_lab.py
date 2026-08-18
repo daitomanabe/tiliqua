@@ -26,6 +26,9 @@ AV_CONTRACT = ROOT / "snn2" / "snn2_av_contract.json"
 SYNTHESIS_CONTRACT = ROOT / "snn2" / "snn2_synthesis_contract.json"
 POPULATION_CONTRACT = ROOT / "snn2" / "snn2_population_contract.json"
 PERFORMANCE_CONTRACT = ROOT / "snn2" / "snn2_performance_contract.json"
+PERFORMANCE_LIVE_CONTRACT = (
+    ROOT / "snn2" / "snn2_performance_live_contract.json"
+)
 METRICS = ROOT / "snn2-av-metrics.json"
 
 
@@ -51,6 +54,7 @@ def doctor(_: argparse.Namespace) -> None:
         SYNTHESIS_CONTRACT,
         POPULATION_CONTRACT,
         PERFORMANCE_CONTRACT,
+        PERFORMANCE_LIVE_CONTRACT,
     ]
     missing = [str(path.relative_to(ROOT)) for path in required if not path.is_file()]
     if missing:
@@ -91,8 +95,8 @@ def stress(_: argparse.Namespace) -> None:
 
 def evaluate_av_contract(metrics: dict, contract: dict) -> list[str]:
     failures = []
-    if not metrics.get("self_test"):
-        failures.append("simulation did not report self-test mode")
+    if metrics.get("self_test", False) != contract.get("self_test", True):
+        failures.append("simulation self-test state does not match the contract")
     if metrics.get("performance", False) != contract.get("performance", False):
         failures.append("simulation output profile does not match the contract")
     dvi = metrics["dvi"]
@@ -191,13 +195,13 @@ def integration(args: argparse.Namespace) -> None:
     av_report(args)
 
 
-def performance_report(_: argparse.Namespace) -> None:
+def report_performance_contract(contract_path: Path, title: str) -> None:
     if not METRICS.is_file():
         raise SystemExit(f"metrics not found: {METRICS}")
     metrics = json.loads(METRICS.read_text())
-    contract = json.loads(PERFORMANCE_CONTRACT.read_text())
+    contract = json.loads(contract_path.read_text())
     failures = evaluate_av_contract(metrics, contract)
-    print("\nSNN2 music/CV report")
+    print(f"\n{title}")
     print(f"  result             {'PASS' if not failures else 'FAIL'}")
     print("  OUT0 / OUT1        stereo SNN-derived triangle ensemble")
     print("  OUT2               C-minor pentatonic 1 V/oct pitch CV")
@@ -212,6 +216,18 @@ def performance_report(_: argparse.Namespace) -> None:
         print(f"  failure            {failure}")
     if failures:
         raise SystemExit(1)
+
+
+def performance_report(_: argparse.Namespace) -> None:
+    report_performance_contract(
+        PERFORMANCE_CONTRACT, "SNN2 self-test music/CV report"
+    )
+
+
+def performance_live_report(_: argparse.Namespace) -> None:
+    report_performance_contract(
+        PERFORMANCE_LIVE_CONTRACT, "SNN2 live-input music/CV report"
+    )
 
 
 def performance(args: argparse.Namespace) -> None:
@@ -239,6 +255,33 @@ def performance(args: argparse.Namespace) -> None:
         ])
         evaluate_bitstream(
             ROOT / "build" / f"snn2-av-performance-lab-{args.hw}",
+            SYNTHESIS_CONTRACT,
+        )
+
+
+def performance_live(args: argparse.Namespace) -> None:
+    METRICS.unlink(missing_ok=True)
+    run([
+        sys.executable,
+        "src/top/snn2_av/top.py",
+        "sim",
+        "--hw", args.hw,
+        "--modeline", args.modeline,
+        "--performance",
+    ])
+    performance_live_report(args)
+    if args.with_build:
+        run([
+            sys.executable,
+            "src/top/snn2_av/top.py",
+            "build",
+            "--hw", args.hw,
+            "--modeline", args.modeline,
+            "--performance",
+            "--nextpnr-seed", "2",
+        ])
+        evaluate_bitstream(
+            ROOT / "build" / f"snn2-av-performance-live-{args.hw}",
             SYNTHESIS_CONTRACT,
         )
 
@@ -319,6 +362,8 @@ def make_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("report")
     subparsers.add_parser("av-report")
     subparsers.add_parser("performance")
+    subparsers.add_parser("performance-live")
+    subparsers.add_parser("performance-live-report")
     subparsers.add_parser("performance-report")
     subparsers.add_parser("check")
     importer = subparsers.add_parser("import-manifest")
@@ -336,6 +381,8 @@ def main() -> None:
         "report": report,
         "av-report": av_report,
         "performance": performance,
+        "performance-live": performance_live,
+        "performance-live-report": performance_live_report,
         "performance-report": performance_report,
         "check": check,
         "import-manifest": import_manifest,
