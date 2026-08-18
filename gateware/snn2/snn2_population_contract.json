@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "profile": "snn2_256x16_sparse_alif_v1",
+  "fixture": {
+    "samples": 2048,
+    "measurement_start": 1024,
+    "encoder_spikes": "rotating_one_hot",
+    "inhibitory_gain_q8": 256,
+    "adaptation_gain_q8": 256
+  },
+  "audio": {
+    "maximum_absolute": 4000,
+    "readout_minimum_bipolar_peak": 500
+  },
+  "profiles": [
+    {
+      "name": "low",
+      "external_drive": 4000,
+      "excitatory_total": [5000, 8000],
+      "excitatory_maximum": [5, 20],
+      "excitatory_active_samples": [900, 1024],
+      "inhibitory_total": [1, 50],
+      "inhibitory_maximum": [1, 2],
+      "inhibitory_active_samples": [1, 50]
+    },
+    {
+      "name": "medium",
+      "external_drive": 8000,
+      "excitatory_total": [10000, 15000],
+      "excitatory_maximum": [15, 30],
+      "excitatory_active_samples": [800, 1024],
+      "inhibitory_total": [100, 500],
+      "inhibitory_maximum": [1, 8],
+      "inhibitory_active_samples": [100, 350]
+    },
+    {
+      "name": "high",
+      "external_drive": 16000,
+      "excitatory_total": [16000, 21000],
+      "excitatory_maximum": [15, 30],
+      "excitatory_active_samples": [900, 1024],
+      "inhibitory_total": [400, 900],
+      "inhibitory_maximum": [1, 8],
+      "inhibitory_active_samples": [350, 650]
+    }
+  ]
+}

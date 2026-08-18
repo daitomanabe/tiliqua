@@ -24,6 +24,8 @@ The source boundary consists of:
 * ``src/top/snn2_av/`` -- calibrated four-input/four-output AV top and
   six-frame Verilator harness;
 * ``snn2/snn2_256x16_sparse_alif_v1.json`` -- deterministic bring-up network;
+* ``snn2/snn2_population_contract.json`` -- frozen low, medium, and high drive
+  population-rate and audio bounds;
 * ``snn2/golden/single_neuron_traces.json`` -- immutable arithmetic boundary
   fixtures; and
 * ``tests/test_snn2.py`` and ``scripts/snn2_lab.py`` -- regression, import,
@@ -83,7 +85,7 @@ covers the 4,096-sample integer fixture and all-neurons-spike scheduler case.
      - Current result
    * - Unit tests
      - all pass
-     - 14 tests / 20 subtests
+     - 15 tests / 23 subtests
    * - Previous spikes
      - 256
      - 256
@@ -203,8 +205,9 @@ derived-file SHA-256. Repeat export of the same input is byte-identical.
 
 The 4,096-sample fixture proves deterministic bounded behavior in the
 independent integer model; the current all-state RTL equivalence fixture is
-shorter. Full 4,096-sample all-state RTL comparison and frozen
-low/medium/high population-rate ranges remain named regression gates.
+shorter. Low, medium, and high population-rate and audio ranges are frozen by
+``snn2/snn2_population_contract.json`` and checked in every full test run.
+Full 4,096-sample all-state RTL comparison remains a named regression gate.
 
 No command on this page accesses USB, ``FLASH / DEBUG``, ``DEVICE / HOST``,
 SPI flash, calibration EEPROM, ES-9, or physical outputs. Place-and-route does

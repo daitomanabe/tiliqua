@@ -31,6 +31,7 @@ from tiliqua.video.snn2_visualizer import SNN2Visualizer
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_MANIFEST = ROOT / "snn2" / "snn2_256x16_sparse_alif_v1.json"
 GOLDEN_TRACES = ROOT / "snn2" / "golden" / "single_neuron_traces.json"
+POPULATION_CONTRACT = ROOT / "snn2" / "snn2_population_contract.json"
 
 
 def rehash(manifest):
@@ -174,6 +175,80 @@ class SNN2ReferenceTests(unittest.TestCase):
         self.assertEqual(model.last_event_count, 0)
         model.step(encoder_spikes=0, external_drive=0)
         self.assertEqual(model.last_event_count, previous_spikes * 8)
+
+    def test_frozen_low_medium_high_population_ranges(self):
+        contract = json.loads(POPULATION_CONTRACT.read_text())
+        fixture = contract["fixture"]
+        measured = []
+        for profile in contract["profiles"]:
+            with self.subTest(profile=profile["name"]):
+                model = SNN2Reference(make_default_manifest())
+                excitatory_counts = []
+                inhibitory_counts = []
+                output_minima = [32767] * 4
+                output_maxima = [-32768] * 4
+                for sample in range(fixture["samples"]):
+                    outputs = model.step(
+                        encoder_spikes=1 << (sample % 8),
+                        external_drive=profile["external_drive"],
+                        inhibitory_gain_q8=fixture["inhibitory_gain_q8"],
+                        adaptation_gain_q8=fixture["adaptation_gain_q8"],
+                    )
+                    if sample < fixture["measurement_start"]:
+                        continue
+                    excitatory_counts.append(sum(
+                        state.s
+                        for index, state in enumerate(model.states)
+                        if index % 4 != 3
+                    ))
+                    inhibitory_counts.append(sum(
+                        state.s
+                        for index, state in enumerate(model.states)
+                        if index % 4 == 3
+                    ))
+                    for channel, value in enumerate(outputs):
+                        output_minima[channel] = min(output_minima[channel], value)
+                        output_maxima[channel] = max(output_maxima[channel], value)
+
+                actual = {
+                    "excitatory_total": sum(excitatory_counts),
+                    "excitatory_maximum": max(excitatory_counts),
+                    "excitatory_active_samples": sum(
+                        value > 0 for value in excitatory_counts
+                    ),
+                    "inhibitory_total": sum(inhibitory_counts),
+                    "inhibitory_maximum": max(inhibitory_counts),
+                    "inhibitory_active_samples": sum(
+                        value > 0 for value in inhibitory_counts
+                    ),
+                }
+                for key, value in actual.items():
+                    self.assertTrue(
+                        profile[key][0] <= value <= profile[key][1],
+                        f"{profile['name']} {key}={value} outside {profile[key]}",
+                    )
+                audio = contract["audio"]
+                self.assertLessEqual(
+                    max(abs(value) for value in output_minima + output_maxima),
+                    audio["maximum_absolute"],
+                )
+                peak = audio["readout_minimum_bipolar_peak"]
+                self.assertLessEqual(output_minima[0], -peak)
+                self.assertGreaterEqual(output_maxima[0], peak)
+                measured.append(actual)
+
+        self.assertLess(
+            measured[0]["excitatory_total"], measured[1]["excitatory_total"]
+        )
+        self.assertLess(
+            measured[1]["excitatory_total"], measured[2]["excitatory_total"]
+        )
+        self.assertLess(
+            measured[0]["inhibitory_total"], measured[1]["inhibitory_total"]
+        )
+        self.assertLess(
+            measured[1]["inhibitory_total"], measured[2]["inhibitory_total"]
+        )
 
 
 class SNN2EncoderTests(unittest.TestCase):

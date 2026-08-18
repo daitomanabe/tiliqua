@@ -24,6 +24,7 @@ DEFAULT_MANIFEST = ROOT / "snn2" / "snn2_256x16_sparse_alif_v1.json"
 GOLDEN_TRACES = ROOT / "snn2" / "golden" / "single_neuron_traces.json"
 AV_CONTRACT = ROOT / "snn2" / "snn2_av_contract.json"
 SYNTHESIS_CONTRACT = ROOT / "snn2" / "snn2_synthesis_contract.json"
+POPULATION_CONTRACT = ROOT / "snn2" / "snn2_population_contract.json"
 METRICS = ROOT / "snn2-av-metrics.json"
 
 
@@ -46,6 +47,7 @@ def doctor(_: argparse.Namespace) -> None:
         GOLDEN_TRACES,
         AV_CONTRACT,
         SYNTHESIS_CONTRACT,
+        POPULATION_CONTRACT,
     ]
     missing = [str(path.relative_to(ROOT)) for path in required if not path.is_file()]
     if missing:
