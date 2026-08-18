@@ -531,6 +531,35 @@ class SNN2PerformanceMapperTests(unittest.TestCase):
         sim.add_testbench(bench)
         sim.run()
 
+    def test_gate_density_slews_one_pulse_toward_activity_target(self):
+        dut = SNN2PerformanceMapper(
+            control_period_samples=16,
+            gate_high_samples=8,
+            activity_profile="instantaneous",
+        )
+
+        async def advance_period(ctx, excitatory, inhibitory):
+            ctx.set(dut.excitatory_spike_count, excitatory)
+            ctx.set(dut.inhibitory_spike_count, inhibitory)
+            for _ in range(16):
+                await ctx.tick()
+
+        async def bench(ctx):
+            ctx.set(dut.i.valid, 1)
+            ctx.set(dut.o.ready, 1)
+
+            for expected in range(3, 13):
+                await advance_period(ctx, 30, 10)
+                self.assertEqual(ctx.get(dut.gate_density), expected)
+
+            await advance_period(ctx, 0, 0)
+            self.assertEqual(ctx.get(dut.gate_density), 11)
+
+        sim = Simulator(dut)
+        sim.add_clock(1e-6)
+        sim.add_testbench(bench)
+        sim.run()
+
     def test_wall_clock_control_advances_while_stream_is_stalled(self):
         dut = SNN2PerformanceMapper(sample_rate=800, wall_clock_hz=800)
 

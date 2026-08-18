@@ -78,6 +78,7 @@ class SNN2PerformanceMapper(wiring.Component):
         self.gate_remaining = Signal(
             range(self.gate_high_ticks + 1), init=self.gate_high_ticks
         )
+        self.gate_density = Signal(4, init=2)
         self.note_indices = [
             Signal(3, init=value) for value in (0, 2, 2)
         ]
@@ -120,7 +121,8 @@ class SNN2PerformanceMapper(wiring.Component):
             range(192 * self.activity_period_observations + 1)
         )
         total_activity = Signal(range(maximum_population_sum + 1))
-        gate_density = Signal(4)
+        target_gate_density = Signal(4)
+        slewed_gate_density = Signal(4)
         transfer = Signal()
         period = (
             1
@@ -256,7 +258,16 @@ class SNN2PerformanceMapper(wiring.Component):
                     self.note_indices, next_indices, slewed_indices
                 )
             ),
-            gate_density.eq(density_value),
+            target_gate_density.eq(density_value),
+            slewed_gate_density.eq(Mux(
+                target_gate_density > self.gate_density,
+                self.gate_density + 1,
+                Mux(
+                    target_gate_density < self.gate_density,
+                    self.gate_density - 1,
+                    self.gate_density,
+                ),
+            )),
             self.o.payload[2].as_value().eq(pitch_values[self.note_indices[0]]),
             self.o.payload[3].as_value().eq(Mux(
                 self.gate_remaining != 0,
@@ -309,11 +320,12 @@ class SNN2PerformanceMapper(wiring.Component):
                 self.note_indices[0].eq(slewed_indices[0]),
                 self.note_indices[1].eq(slewed_indices[1]),
                 self.note_indices[2].eq(slewed_indices[2]),
+                self.gate_density.eq(slewed_gate_density),
                 self.activity_stride_counter.eq(0),
                 self.excitatory_activity_sum.eq(0),
                 self.inhibitory_activity_sum.eq(0),
                 self.gate_remaining.eq(Mux(
-                    pattern_values[self.step] < gate_density,
+                    pattern_values[self.step] < slewed_gate_density,
                     self.gate_high_ticks,
                     0,
                 )),
