@@ -54,14 +54,30 @@ The all-neurons-spike RTL fixture issues all 2,048 events in 531 scheduler
 cycles and commits one sample in 613 sync cycles, within the 640- and
 1,250-cycle limits. These are simulation results.
 
-The SNN2 music/CV self-test build at commit ``b96f382`` closes sync at
-71.86 MHz with 61% physical COMB. Its live-input counterpart closes sync at
-63.04 MHz with 71% physical COMB. Both also pass audio, DVI, DVI5x, FF, BRAM,
-and DSP limits. The SHA-pinned bitstreams were loaded through ``FLASH / DEBUG``
-to volatile SRAM and measured through the fixed ES-9 fixture; SPI flash was not
-written. The self-test returned dynamic stereo audio, ``+0.587..+1.249 V``
-pitch CV, and a ``0/5 V`` gate. The live test changed pitch by ``+0.992 V`` and
-gate density by ``+0.227`` between the frozen low/high drive profiles. The
+The current phrase-stability music/CV profile is commit ``6942aa2``. Pitch and
+gate density now approach their mapped targets by one musical scale step or
+one Euclidean pulse per 125 ms control interval. Registering those targets
+also breaks the threshold/compare path with one intentional control interval
+of latency. The live-input build closes sync at 64.91 MHz with 71% physical
+COMB, 7,716 FFs, 39/42 enforced ``DP16KD`` blocks, and 9/14 enforced DSPs. The
+self-test build closes sync at 74.36 MHz with 61% physical COMB, 6,453 FFs,
+39/42 ``DP16KD`` blocks, and 4/14 DSPs. Both also pass audio, DVI, and DVI5x
+timing.
+
+An intermediate unpipelined live candidate was stopped after 15 minutes 36
+seconds without route convergence at conflict 182. Registering the performance
+targets removed that combinational path; the replacement live build converged
+and passed the 60 MHz sync contract at the 64.91 MHz result above.
+
+The SHA-pinned bitstreams were loaded through ``FLASH / DEBUG`` to volatile
+SRAM and measured through the fixed ES-9 fixture. The self-test returned
+dynamic stereo audio, ``+0.836..+1.251 V`` pitch CV, a ``0/5 V`` gate, and a
+stereo correlation of ``+0.099``. The live test changed pitch by ``+0.827 V``
+and gate density by ``+0.252`` between the frozen low/high drive profiles. The
+live bitstream with SHA-256
+``3151fa54632c1205c828c17e2f3135e8395ac95f614210ae4f88ea1e6ef4fc52``
+was then written only to the explicitly authorized slot 7. The scoped helper
+made a full pre-write slot backup and passed device readback verification. The
 trained manifest remains a named gate.
 The full 4,096-sample all-state/event RTL comparison and frozen low, medium,
 and high population-rate ranges run locally. See :doc:`snn2_v1_reference_rtl`
@@ -405,6 +421,15 @@ a much denser steady state, so averaging a complete interval would collapse the
 pitch to one constant note. Sampling the current E/I counts at each 8 Hz boundary
 retains a dynamic CV regression while leaving the live mapping unchanged.
 
+The performance mapper latches pitch and density targets at each 8 Hz boundary.
+The active pitch index then moves toward its target by at most one adjacent
+C-minor-pentatonic scale step per 125 ms interval. The active Euclidean density
+moves by at most one pulse per interval. This bounded slew suppresses abrupt
+multi-note and multi-pulse control jumps while retaining deterministic mapping.
+The extra target register is an intentional one-interval pipeline stage. The
+melody starts at scale index zero, so pitch CV starts at the root ``0 V`` until
+the first mapped movement.
+
 The normal SNN2 output contract above remains the default when ``--performance``
 is absent. Performance mode is therefore an explicit build profile rather than
 a silent change to existing SNN2 bitstreams.
@@ -550,22 +575,33 @@ Implementation phases
    every confirmed failure and recovery. Do not load hardware before this gate
    passes.
 6. **Volatile hardware validation:** use the fixed ES-9 fixture, conservative
-   levels, all four returns, a final bounded zero tail, and FPGA SRAM only.
-7. **Offline training:** import one quantized trained manifest and repeat every
+   levels, all four returns, a final bounded zero tail, and FPGA SRAM first.
+7. **Bounded persistence checkpoint:** only after the exact bitstream SHA passes
+   simulation, QoR, and volatile hardware validation, use an explicitly
+   authorized flash slot, make a complete pre-write slot backup, write only
+   that slot, and require device readback verification.
+8. **Offline training:** import one quantized trained manifest and repeat every
    equivalence, QoR, and hardware gate under a new bitstream SHA.
-8. **Scale study:** evaluate 512 neurons or per-edge delay only as a separate
+9. **Scale study:** evaluate 512 neurons or per-edge delay only as a separate
    bounded experiment. Online STDP remains a later specification.
 
 Hardware safety boundary
 ========================
 
-SNN2 development does not authorize an SPI flash or calibration EEPROM write.
-Simulation and QoR come first. A hardware experiment shall use the
-``FLASH / DEBUG`` connector only for the checked SRAM load and
-``DEVICE / HOST`` for runtime USB audio/MIDI where required. It shall use the
-scoped management helper, match exactly one configured R5 identity, record the
-bitstream SHA-256 and whether it was loaded to SRAM, and leave all four physical
-outputs at zero on normal completion or failure.
+SNN2 development does not by itself authorize an SPI flash write and never
+authorizes a calibration EEPROM write. Simulation and QoR come first. A
+hardware experiment shall use ``FLASH / DEBUG`` for the checked SRAM load or a
+separately authorized bounded slot write, and ``DEVICE / HOST`` for runtime USB
+audio/MIDI where required. It shall use the scoped management helper, match
+exactly one configured R5 identity, record the bitstream SHA-256 and destination,
+and leave all four physical outputs at zero on normal completion or failure.
+
+An SPI flash candidate may be persisted only after the same SHA passes
+simulation, QoR, and SRAM hardware validation and the user has explicitly
+configured one allowed slot. The helper must back up the complete slot before
+every write, reject every other offset, bind the operation to the selected USB
+identity, and verify the written bytes by reading them back from the device.
+The backup checksum and rollback command are part of the validation record.
 
 The existing SNN remains the recovery and comparison baseline throughout SNN2
 development. SNN2 must not replace its default hardware identity until the new
