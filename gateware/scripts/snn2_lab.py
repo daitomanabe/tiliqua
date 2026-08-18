@@ -25,6 +25,7 @@ GOLDEN_TRACES = ROOT / "snn2" / "golden" / "single_neuron_traces.json"
 AV_CONTRACT = ROOT / "snn2" / "snn2_av_contract.json"
 SYNTHESIS_CONTRACT = ROOT / "snn2" / "snn2_synthesis_contract.json"
 POPULATION_CONTRACT = ROOT / "snn2" / "snn2_population_contract.json"
+PERFORMANCE_CONTRACT = ROOT / "snn2" / "snn2_performance_contract.json"
 METRICS = ROOT / "snn2-av-metrics.json"
 
 
@@ -38,6 +39,7 @@ def doctor(_: argparse.Namespace) -> None:
         ROOT / "src" / "tiliqua" / "snn2" / "manifest.py",
         ROOT / "src" / "tiliqua" / "snn2" / "reference.py",
         ROOT / "src" / "tiliqua" / "snn2" / "encoder.py",
+        ROOT / "src" / "tiliqua" / "snn2" / "performance.py",
         ROOT / "src" / "tiliqua" / "snn2" / "rtl.py",
         ROOT / "src" / "tiliqua" / "video" / "snn2_visualizer.py",
         ROOT / "src" / "top" / "snn2_av" / "top.py",
@@ -48,6 +50,7 @@ def doctor(_: argparse.Namespace) -> None:
         AV_CONTRACT,
         SYNTHESIS_CONTRACT,
         POPULATION_CONTRACT,
+        PERFORMANCE_CONTRACT,
     ]
     missing = [str(path.relative_to(ROOT)) for path in required if not path.is_file()]
     if missing:
@@ -90,6 +93,8 @@ def evaluate_av_contract(metrics: dict, contract: dict) -> list[str]:
     failures = []
     if not metrics.get("self_test"):
         failures.append("simulation did not report self-test mode")
+    if metrics.get("performance", False) != contract.get("performance", False):
+        failures.append("simulation output profile does not match the contract")
     dvi = metrics["dvi"]
     expected_dvi = contract["dvi"]
     if dvi["frames"] < expected_dvi["minimum_frames"]:
@@ -130,6 +135,12 @@ def evaluate_av_contract(metrics: dict, contract: dict) -> list[str]:
             failures.append(f"audio {channel} floor exceeds the safe contract")
         if actual["nonzero"] < expected.get("minimum_nonzero_samples", 0):
             failures.append(f"audio {channel} is inactive")
+        if actual["zero_crossings"] < expected.get("minimum_zero_crossings", 0):
+            failures.append(f"audio {channel} has too few zero crossings")
+        if "maximum_absolute" in expected and max(
+            abs(actual["min"]), abs(actual["max"])
+        ) > expected["maximum_absolute"]:
+            failures.append(f"audio {channel} exceeds the absolute safe limit")
     return failures
 
 
@@ -178,6 +189,58 @@ def integration(args: argparse.Namespace) -> None:
         "--self-test",
     ])
     av_report(args)
+
+
+def performance_report(_: argparse.Namespace) -> None:
+    if not METRICS.is_file():
+        raise SystemExit(f"metrics not found: {METRICS}")
+    metrics = json.loads(METRICS.read_text())
+    contract = json.loads(PERFORMANCE_CONTRACT.read_text())
+    failures = evaluate_av_contract(metrics, contract)
+    print("\nSNN2 music/CV report")
+    print(f"  result             {'PASS' if not failures else 'FAIL'}")
+    print("  OUT0 / OUT1        stereo SNN-derived triangle ensemble")
+    print("  OUT2               C-minor pentatonic 1 V/oct pitch CV")
+    print("  OUT3               0/5 V activity-density gate")
+    for entry in metrics["audio"]:
+        print(
+            f"  output {entry['channel']}           samples={entry['samples']} "
+            f"min={entry['min']} max={entry['max']} "
+            f"zero-crossings={entry['zero_crossings']}"
+        )
+    for failure in failures:
+        print(f"  failure            {failure}")
+    if failures:
+        raise SystemExit(1)
+
+
+def performance(args: argparse.Namespace) -> None:
+    METRICS.unlink(missing_ok=True)
+    run([
+        sys.executable,
+        "src/top/snn2_av/top.py",
+        "sim",
+        "--hw", args.hw,
+        "--modeline", args.modeline,
+        "--self-test",
+        "--performance",
+    ])
+    performance_report(args)
+    if args.with_build:
+        run([
+            sys.executable,
+            "src/top/snn2_av/top.py",
+            "build",
+            "--hw", args.hw,
+            "--modeline", args.modeline,
+            "--self-test",
+            "--performance",
+            "--nextpnr-seed", "2",
+        ])
+        evaluate_bitstream(
+            ROOT / "build" / f"snn2-av-performance-lab-{args.hw}",
+            SYNTHESIS_CONTRACT,
+        )
 
 
 def build(args: argparse.Namespace) -> None:
@@ -255,6 +318,8 @@ def make_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("stress")
     subparsers.add_parser("report")
     subparsers.add_parser("av-report")
+    subparsers.add_parser("performance")
+    subparsers.add_parser("performance-report")
     subparsers.add_parser("check")
     importer = subparsers.add_parser("import-manifest")
     importer.add_argument("manifest")
@@ -270,6 +335,8 @@ def main() -> None:
         "stress": stress,
         "report": report,
         "av-report": av_report,
+        "performance": performance,
+        "performance-report": performance_report,
         "check": check,
         "import-manifest": import_manifest,
     }
