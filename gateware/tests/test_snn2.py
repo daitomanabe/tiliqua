@@ -597,6 +597,52 @@ class SNN2PerformanceMapperTests(unittest.TestCase):
 
 class SNN2VisualizerTests(unittest.TestCase):
 
+    def test_additive_view_maps_exactly_1000_sines_to_reactive_particles(self):
+        self.assertEqual(SNN2Visualizer.ADDITIVE_TONES, 5)
+        self.assertEqual(SNN2Visualizer.ADDITIVE_HARMONICS, 10)
+        self.assertEqual(SNN2Visualizer.ADDITIVE_MICRO_SINES, 20)
+        self.assertEqual(SNN2Visualizer.ADDITIVE_OSCILLATORS, 1000)
+
+        dut = SNN2Visualizer(additive_view=True)
+
+        async def bench(ctx):
+            # Tone 0, harmonic 0, micro-sine 0 is the first particle.
+            ctx.set(dut.x, 64)
+            ctx.set(dut.y, 161)
+            ctx.set(dut.frame, 0)
+            ctx.set(dut.band_levels, 0)
+            await ctx.delay(1e-9)
+            quiet = (ctx.get(dut.r), ctx.get(dut.g), ctx.get(dut.b))
+
+            ctx.set(dut.band_levels, 255)
+            await ctx.delay(1e-9)
+            active = (ctx.get(dut.r), ctx.get(dut.g), ctx.get(dut.b))
+            self.assertNotEqual(quiet, active)
+            self.assertGreater(sum(active), sum(quiet) + 300)
+
+            # The final tone/harmonic cell uses the highest measured band and
+            # remains visually distinct from the first cell.
+            ctx.set(dut.x, 576)
+            ctx.set(dut.y, 449)
+            ctx.set(dut.band_levels, 255 << (7 * 8))
+            await ctx.delay(1e-9)
+            final_cell = (ctx.get(dut.r), ctx.get(dut.g), ctx.get(dut.b))
+            self.assertNotEqual(active, final_cell)
+
+            # A real encoder band drives the corresponding top spectrum bar.
+            ctx.set(dut.x, 104 + 2 * 64 + 32)
+            ctx.set(dut.y, 120)
+            ctx.set(dut.band_levels, 255 << (2 * 8))
+            await ctx.delay(1e-9)
+            self.assertEqual(
+                (ctx.get(dut.r), ctx.get(dut.g), ctx.get(dut.b)),
+                (64, 208, 255),
+            )
+
+        sim = Simulator(dut)
+        sim.add_testbench(bench)
+        sim.run()
+
     def test_population_band_and_fault_colours_are_distinct(self):
         dut = SNN2Visualizer()
 
