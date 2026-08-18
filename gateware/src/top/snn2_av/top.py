@@ -21,6 +21,7 @@ from tiliqua.periph import eurorack_pmod
 from tiliqua.platform import RebootProvider
 from tiliqua.snn2.encoder import SNN2AudioEncoder, SNN2TestSource
 from tiliqua.snn2.manifest import validate_manifest
+from tiliqua.snn2.performance import SNN2PerformanceMapper
 from tiliqua.snn2.rtl import SparseALIFNetwork
 from tiliqua.video import dvi
 from tiliqua.video.snn2_visualizer import SNN2Visualizer
@@ -42,7 +43,10 @@ class SNN2AVTop(Elaboratable):
         io_right=["", "", "16x16 SNN2 + meters", "", "", ""],
     )
 
-    def __init__(self, *, clock_settings, self_test=False, manifest=None):
+    def __init__(
+        self, *, clock_settings, self_test=False, performance=False,
+        manifest=None,
+    ):
         if clock_settings.modeline is None:
             raise ValueError("snn2_av requires a fixed video mode")
         if manifest is None:
@@ -50,6 +54,7 @@ class SNN2AVTop(Elaboratable):
         self.manifest = validate_manifest(manifest)
         self.clock_settings = clock_settings
         self.self_test = self_test
+        self.performance = performance
         self.pmod0 = eurorack_pmod.EurorackPmod(clock_settings.audio_clock)
         self.core = SparseALIFNetwork(self.manifest)
         self.encoder = None if self_test else SNN2AudioEncoder(self.manifest)
@@ -62,6 +67,7 @@ class SNN2AVTop(Elaboratable):
         self.video_b = Signal(8)
         self.self_test_active = Signal(init=int(self_test))
         self.cv_output_active = Signal()
+        self.performance_output_active = Signal(init=int(performance))
         self.test_phase = Signal(32)
         self.test_sample_index = Signal(32)
         self.snn2_fault = Signal()
@@ -80,6 +86,19 @@ class SNN2AVTop(Elaboratable):
                     "inhibitory rate", "E/I balance",
                 ],
                 io_right=["", "", "SNN2 test + meters", "", "", ""],
+            )
+        if performance:
+            self.bitstream_help = BitstreamHelp(
+                brief="SNN2 stereo music plus pitch CV and gate",
+                io_left=[
+                    "unused" if self_test else "signal",
+                    "unused" if self_test else "encoder gain",
+                    "unused" if self_test else "inhibitory gain",
+                    "unused" if self_test else "adaptation gain",
+                    "stereo music L", "stereo music R",
+                    "1V/oct melody", "density gate",
+                ],
+                io_right=["", "", "SNN2 music + CV", "", "", ""],
             )
         super().__init__()
 
@@ -108,6 +127,7 @@ class SNN2AVTop(Elaboratable):
         m.d.comb += [
             self.self_test_active.eq(self.self_test),
             self.cv_output_active.eq(0),
+            self.performance_output_active.eq(self.performance),
             self.test_phase.eq(core.spike_vector[:32]),
             self.test_sample_index.eq(core.sample_index),
             self.snn2_fault.eq(core.fault),
@@ -131,7 +151,31 @@ class SNN2AVTop(Elaboratable):
                 m.d.comb += self.band_levels_debug.word_select(band, 8).eq(
                     encoder.band_levels[band]
                 )
-        wiring.connect(m, core.o, pmod0.i_cal)
+        if self.performance:
+            m.submodules.performance_mapper = performance_mapper = (
+                SNN2PerformanceMapper(
+                    sample_rate=self.clock_settings.audio_clock.fs(),
+                    control_period_samples=512 if self.self_test else 6000,
+                    gate_high_samples=256 if self.self_test else 3000,
+                    wall_clock_hz=(
+                        int(self.clock_settings.frequencies.sync)
+                        if sim.is_hw(platform)
+                        else None
+                    ),
+                )
+            )
+            m.d.comb += [
+                performance_mapper.excitatory_spike_count.eq(
+                    core.excitatory_spike_count
+                ),
+                performance_mapper.inhibitory_spike_count.eq(
+                    core.inhibitory_spike_count
+                ),
+            ]
+            wiring.connect(m, core.o, performance_mapper.i)
+            wiring.connect(m, performance_mapper.o, pmod0.i_cal)
+        else:
+            wiring.connect(m, core.o, pmod0.i_cal)
 
         for member in dvi_tgen.timings.signature.members:
             m.d.comb += getattr(dvi_tgen.timings, member).eq(
@@ -241,6 +285,9 @@ def simulation_ports(fragment):
         "dvi_b": (fragment.video_b, None),
         "self_test_active": (fragment.self_test_active, None),
         "cv_output_active": (fragment.cv_output_active, None),
+        "performance_output_active": (
+            fragment.performance_output_active, None
+        ),
         "test_phase": (fragment.test_phase, None),
         "test_sample_index": (fragment.test_sample_index, None),
         "snn2_fault": (fragment.snn2_fault, None),
@@ -254,6 +301,11 @@ def simulation_ports(fragment):
 def argparse_callback(parser):
     parser.add_argument("--self-test", action="store_true")
     parser.add_argument(
+        "--performance",
+        action="store_true",
+        help="Output stereo SNN2 music, 1 V/oct pitch, and a density gate",
+    )
+    parser.add_argument(
         "--nextpnr-seed",
         type=int,
         default=None,
@@ -263,8 +315,15 @@ def argparse_callback(parser):
 
 def argparse_fragment(args):
     if args.name == "SNN2-AV":
-        args.name = "SNN2-AV-LAB" if args.self_test else "SNN2-AV-LIVE"
-    return {"self_test": args.self_test}
+        if args.performance:
+            args.name = (
+                "SNN2-AV-PERFORMANCE-LAB"
+                if args.self_test
+                else "SNN2-AV-PERFORMANCE-LIVE"
+            )
+        else:
+            args.name = "SNN2-AV-LAB" if args.self_test else "SNN2-AV-LIVE"
+    return {"self_test": args.self_test, "performance": args.performance}
 
 
 if __name__ == "__main__":

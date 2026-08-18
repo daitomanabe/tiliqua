@@ -144,12 +144,34 @@ int main(int argc, char** argv) {
     passed &= maximum_scheduler > 0 && maximum_scheduler <= 640;
     passed &= maximum_excitatory > 0 && maximum_inhibitory > 0;
     passed &= band_activity_mask == 0xff;
-    passed &= audio[0].samples > 3000;
-    passed &= audio[0].minimum < -100 && audio[0].maximum > 100;
-    passed &= audio[1].minimum >= 0 && audio[1].maximum > 1000;
-    passed &= audio[2].minimum >= 0 && audio[2].maximum > 50;
-    passed &= audio[3].minimum >= -20000 && audio[3].maximum <= 20000;
-    passed &= audio[3].nonzero > 1000;
+    const bool performance = top.performance_output_active != 0;
+    if (performance) {
+        for (int channel = 0; channel != 2; ++channel) {
+            passed &= audio[channel].samples > 3000;
+            passed &= audio[channel].minimum < -4000;
+            passed &= audio[channel].maximum > 4000;
+            passed &= audio[channel].minimum >= -17000;
+            passed &= audio[channel].maximum <= 17000;
+            passed &= audio[channel].zero_crossings > 10;
+        }
+        passed &= audio[2].minimum >= 0;
+        passed &= audio[2].maximum <= 6000;
+        passed &= audio[2].nonzero > 1000;
+        passed &= audio[3].minimum >= 0;
+        // The calibrated I2S model applies the codec path's approximately
+        // 0.9 gain, so an internal 20,000-count (+5 V) gate captures near
+        // 18,000 counts here.
+        passed &= audio[3].maximum >= 17000;
+        passed &= audio[3].maximum <= 20000;
+        passed &= audio[3].nonzero > 500;
+    } else {
+        passed &= audio[0].samples > 3000;
+        passed &= audio[0].minimum < -100 && audio[0].maximum > 100;
+        passed &= audio[1].minimum >= 0 && audio[1].maximum > 1000;
+        passed &= audio[2].minimum >= 0 && audio[2].maximum > 50;
+        passed &= audio[3].minimum >= -20000 && audio[3].maximum <= 20000;
+        passed &= audio[3].nonzero > 1000;
+    }
 
     FILE* metrics_file = std::fopen(METRICS_FILENAME, "w");
     if (metrics_file == nullptr) {
@@ -160,6 +182,7 @@ int main(int argc, char** argv) {
         "{\n"
         "  \"pass\": %s,\n"
         "  \"self_test\": %s,\n"
+        "  \"performance\": %s,\n"
         "  \"test_sample_index\": %u,\n"
         "  \"test_phase\": %u,\n"
         "  \"network\": {\"fault\": %s, \"maximum_scheduler_cycles\": %u, "
@@ -171,6 +194,7 @@ int main(int argc, char** argv) {
         "  \"audio\": [\n",
         passed ? "true" : "false",
         top.self_test_active ? "true" : "false",
+        performance ? "true" : "false",
         top.test_sample_index,
         top.test_phase,
         observed_fault ? "true" : "false",
