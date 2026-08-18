@@ -79,7 +79,11 @@ class SNN2PerformanceMapper(wiring.Component):
             range(self.gate_high_ticks + 1), init=self.gate_high_ticks
         )
         self.gate_density = Signal(4, init=2)
+        self.target_gate_density = Signal(4, init=2)
         self.note_indices = [
+            Signal(3, init=value) for value in (0, 2, 2)
+        ]
+        self.target_note_indices = [
             Signal(3, init=value) for value in (0, 2, 2)
         ]
         self.phases = [
@@ -121,7 +125,7 @@ class SNN2PerformanceMapper(wiring.Component):
             range(192 * self.activity_period_observations + 1)
         )
         total_activity = Signal(range(maximum_population_sum + 1))
-        target_gate_density = Signal(4)
+        next_gate_density = Signal(4)
         slewed_gate_density = Signal(4)
         transfer = Signal()
         period = (
@@ -255,15 +259,17 @@ class SNN2PerformanceMapper(wiring.Component):
                     Mux(target < current, current - 1, current),
                 ))
                 for current, target, slewed in zip(
-                    self.note_indices, next_indices, slewed_indices
+                    self.note_indices,
+                    self.target_note_indices,
+                    slewed_indices,
                 )
             ),
-            target_gate_density.eq(density_value),
+            next_gate_density.eq(density_value),
             slewed_gate_density.eq(Mux(
-                target_gate_density > self.gate_density,
+                self.target_gate_density > self.gate_density,
                 self.gate_density + 1,
                 Mux(
-                    target_gate_density < self.gate_density,
+                    self.target_gate_density < self.gate_density,
                     self.gate_density - 1,
                     self.gate_density,
                 ),
@@ -320,7 +326,11 @@ class SNN2PerformanceMapper(wiring.Component):
                 self.note_indices[0].eq(slewed_indices[0]),
                 self.note_indices[1].eq(slewed_indices[1]),
                 self.note_indices[2].eq(slewed_indices[2]),
+                self.target_note_indices[0].eq(next_indices[0]),
+                self.target_note_indices[1].eq(next_indices[1]),
+                self.target_note_indices[2].eq(next_indices[2]),
                 self.gate_density.eq(slewed_gate_density),
+                self.target_gate_density.eq(next_gate_density),
                 self.activity_stride_counter.eq(0),
                 self.excitatory_activity_sum.eq(0),
                 self.inhibitory_activity_sum.eq(0),

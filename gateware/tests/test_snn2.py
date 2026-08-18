@@ -459,7 +459,7 @@ class SNN2PerformanceMapperTests(unittest.TestCase):
             self.assertEqual(ctx.get(dut.note_indices[0]), 0)
 
             saw_gate = False
-            for _ in range(5):
+            for _ in range(6):
                 for sample in range(64):
                     ctx.set(dut.excitatory_spike_count, int(sample % 4 == 0))
                     await ctx.tick()
@@ -519,10 +519,14 @@ class SNN2PerformanceMapperTests(unittest.TestCase):
             ctx.set(dut.i.valid, 1)
             ctx.set(dut.o.ready, 1)
 
+            await advance_period(ctx, 30, 10)
+            self.assertEqual(ctx.get(dut.note_indices[0]), 0)
             for expected in (1, 2, 3, 4, 5, 6, 7):
                 await advance_period(ctx, 30, 10)
                 self.assertEqual(ctx.get(dut.note_indices[0]), expected)
 
+            await advance_period(ctx, 0, 0)
+            self.assertEqual(ctx.get(dut.note_indices[0]), 7)
             await advance_period(ctx, 0, 0)
             self.assertEqual(ctx.get(dut.note_indices[0]), 6)
 
@@ -548,10 +552,14 @@ class SNN2PerformanceMapperTests(unittest.TestCase):
             ctx.set(dut.i.valid, 1)
             ctx.set(dut.o.ready, 1)
 
+            await advance_period(ctx, 30, 10)
+            self.assertEqual(ctx.get(dut.gate_density), 2)
             for expected in range(3, 13):
                 await advance_period(ctx, 30, 10)
                 self.assertEqual(ctx.get(dut.gate_density), expected)
 
+            await advance_period(ctx, 0, 0)
+            self.assertEqual(ctx.get(dut.gate_density), 12)
             await advance_period(ctx, 0, 0)
             self.assertEqual(ctx.get(dut.gate_density), 11)
 
@@ -575,7 +583,7 @@ class SNN2PerformanceMapperTests(unittest.TestCase):
             for _ in range(2):
                 await ctx.tick()
             self.assertEqual(ctx.get(dut.step), 1)
-            self.assertEqual(ctx.get(dut.note_indices[0]), 1)
+            self.assertEqual(ctx.get(dut.note_indices[0]), 0)
             self.assertGreater(ctx.get(dut.gate_remaining), 0)
             self.assertEqual(
                 tuple(ctx.get(phase) for phase in dut.phases), phases_before
