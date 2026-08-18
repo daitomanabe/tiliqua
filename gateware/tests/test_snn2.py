@@ -470,6 +470,35 @@ class SNN2PerformanceMapperTests(unittest.TestCase):
         sim.add_testbench(bench)
         sim.run()
 
+    def test_instantaneous_profile_tracks_dense_activity_steps(self):
+        dut = SNN2PerformanceMapper(
+            control_period_samples=16,
+            gate_high_samples=8,
+            activity_profile="instantaneous",
+        )
+        observed_indices = set()
+
+        async def bench(ctx):
+            ctx.set(dut.i.valid, 1)
+            ctx.set(dut.o.ready, 1)
+            for sample in range(256):
+                excitatory, inhibitory = (
+                    (2, 1),
+                    (10, 3),
+                    (26, 10),
+                    (15, 6),
+                )[(sample // 64) % 4]
+                ctx.set(dut.excitatory_spike_count, excitatory)
+                ctx.set(dut.inhibitory_spike_count, inhibitory)
+                await ctx.tick()
+                observed_indices.add(ctx.get(dut.note_indices[0]))
+
+        sim = Simulator(dut)
+        sim.add_clock(1e-6)
+        sim.add_testbench(bench)
+        sim.run()
+        self.assertGreaterEqual(len(observed_indices), 4)
+
     def test_wall_clock_control_advances_while_stream_is_stalled(self):
         dut = SNN2PerformanceMapper(sample_rate=800, wall_clock_hz=800)
 

@@ -48,8 +48,10 @@ class SNN2PerformanceMapper(wiring.Component):
             raise ValueError("gate high time must fit inside one control period")
         if activity_stride <= 0:
             raise ValueError("activity stride must be positive")
-        if activity_profile not in {"sparse", "dense"}:
-            raise ValueError("activity profile must be sparse or dense")
+        if activity_profile not in {"sparse", "dense", "instantaneous"}:
+            raise ValueError(
+                "activity profile must be sparse, dense, or instantaneous"
+            )
         if wall_clock_hz is not None and wall_clock_hz < 800:
             raise ValueError("wall clock must be at least 800 Hz")
         self.sample_rate = sample_rate
@@ -117,7 +119,11 @@ class SNN2PerformanceMapper(wiring.Component):
         total_activity = Signal(range(maximum_population_sum + 1))
         gate_density = Signal(4)
         transfer = Signal()
-        period = self.activity_period_observations
+        period = (
+            1
+            if self.activity_profile == "instantaneous"
+            else self.activity_period_observations
+        )
 
         def average_threshold(numerator, denominator):
             return (numerator * period + denominator - 1) // denominator
@@ -175,20 +181,37 @@ class SNN2PerformanceMapper(wiring.Component):
             transfer.eq(self.i.valid & self.o.ready),
             self.o.valid.eq(self.i.valid),
             self.i.ready.eq(self.o.ready),
-            excitatory.eq(self.excitatory_activity_sum),
+            excitatory.eq(
+                self.excitatory_spike_count
+                if self.activity_profile == "instantaneous"
+                else self.excitatory_activity_sum
+            ),
             normalized_inhibitory.eq(
-                (self.inhibitory_activity_sum << 1)
-                + self.inhibitory_activity_sum
+                (
+                    self.inhibitory_spike_count
+                    if self.activity_profile == "instantaneous"
+                    else self.inhibitory_activity_sum
+                )
+                * 3
             ),
             total_activity.eq(
-                self.excitatory_activity_sum + self.inhibitory_activity_sum
+                (
+                    self.excitatory_spike_count + self.inhibitory_spike_count
+                    if self.activity_profile == "instantaneous"
+                    else self.excitatory_activity_sum
+                    + self.inhibitory_activity_sum
+                )
             ),
             next_indices[0].eq(threshold_index(
                 excitatory,
                 melody_thresholds,
             )),
             next_indices[1].eq(threshold_index(
-                self.inhibitory_activity_sum,
+                (
+                    self.inhibitory_spike_count
+                    if self.activity_profile == "instantaneous"
+                    else self.inhibitory_activity_sum
+                ),
                 counter_thresholds,
             )),
             next_indices[2].eq(Mux(
@@ -288,24 +311,26 @@ class SNN2PerformanceMapper(wiring.Component):
                 with m.If(self.gate_remaining != 0):
                     m.d.sync += self.gate_remaining.eq(self.gate_remaining - 1)
             with m.If(transfer):
-                with m.If(self.activity_stride_counter == 0):
-                    m.d.sync += [
-                        self.excitatory_activity_sum.eq(
-                            self.excitatory_activity_sum
-                            + self.excitatory_spike_count
-                        ),
-                        self.inhibitory_activity_sum.eq(
-                            self.inhibitory_activity_sum
-                            + self.inhibitory_spike_count
-                        ),
-                    ]
-                with m.If(
-                    self.activity_stride_counter == self.activity_stride - 1
-                ):
-                    m.d.sync += self.activity_stride_counter.eq(0)
-                with m.Else():
-                    m.d.sync += self.activity_stride_counter.eq(
-                        self.activity_stride_counter + 1
-                    )
+                if self.activity_profile != "instantaneous":
+                    with m.If(self.activity_stride_counter == 0):
+                        m.d.sync += [
+                            self.excitatory_activity_sum.eq(
+                                self.excitatory_activity_sum
+                                + self.excitatory_spike_count
+                            ),
+                            self.inhibitory_activity_sum.eq(
+                                self.inhibitory_activity_sum
+                                + self.inhibitory_spike_count
+                            ),
+                        ]
+                    with m.If(
+                        self.activity_stride_counter
+                        == self.activity_stride - 1
+                    ):
+                        m.d.sync += self.activity_stride_counter.eq(0)
+                    with m.Else():
+                        m.d.sync += self.activity_stride_counter.eq(
+                            self.activity_stride_counter + 1
+                        )
 
         return m

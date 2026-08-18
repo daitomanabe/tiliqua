@@ -165,7 +165,7 @@ class SNN2AVTop(Elaboratable):
                         3000 if sim.is_hw(platform) else 256
                     ),
                     activity_profile=(
-                        "dense" if self.self_test else "sparse"
+                        "instantaneous" if self.self_test else "sparse"
                     ),
                     wall_clock_hz=(
                         int(self.clock_settings.frequencies.sync)
