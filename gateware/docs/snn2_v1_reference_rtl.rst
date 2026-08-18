@@ -206,8 +206,8 @@ By default it writes below ``build/snn2-import/<sha-prefix>/``: canonical
 one readout-weight HEX file, and ``build_manifest.json`` containing every
 derived-file SHA-256. Repeat export of the same input is byte-identical.
 
-6. Remaining hardware and training gates
-========================================
+6. Hardware and training gates
+==============================
 
 The independent integer model and RTL are compared for 4,096 consecutive
 samples across the spike vector, all 256 neuron states, all per-neuron E/I
@@ -220,3 +220,40 @@ SPI flash, calibration EEPROM, ES-9, or physical outputs. Place-and-route does
 not establish measured audio/CV or DVI behavior. Volatile SRAM validation must
 use newly recorded bitstream hashes, conservative ES-9 levels, all four
 returns, a bounded zero tail, and the separate scoped management workflow.
+
+On 2026-08-18, the self-test candidate
+``782bf99a7a724659c81fd958710017cafaadd98ab0f8123fbf169d921554a352``
+was loaded through ``FLASH / DEBUG`` into volatile R5 SRAM and measured on all
+four fixed returns with the 16x16, 48 kHz ES-9 fixture. All ES-9 outputs were
+held at zero during the capture and tail. The physical p01/p99 and p01-to-p99
+spans were:
+
+.. list-table:: SNN2 self-test physical outputs
+   :header-rows: 1
+
+   * - Output
+     - p01 / p99
+     - span
+     - Result
+   * - learned readout
+     - -0.259 / +0.445 V
+     - 0.705 V
+     - PASS
+   * - excitatory activity
+     - +0.264 / +0.322 V
+     - 0.057 V
+     - PASS
+   * - inhibitory activity
+     - +0.039 / +0.065 V
+     - 0.026 V
+     - PASS
+   * - normalized E/I balance
+     - +0.199 / +0.548 V
+     - 0.348 V
+     - PASS
+
+All four p0.1/p99.9 values also passed the conservative -5.5--+5.5 V output
+safety gate. This completes the volatile self-test gate only. The SHA remains
+an explicit candidate until live response, control response, and output safety
+pass in one revalidation transaction; it is not a promoted hardware-validated
+default.
