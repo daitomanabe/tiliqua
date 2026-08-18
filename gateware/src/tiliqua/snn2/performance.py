@@ -36,6 +36,7 @@ class SNN2PerformanceMapper(wiring.Component):
         sample_rate=48_000,
         control_period_samples=6000,
         gate_high_samples=3000,
+        activity_stride=32,
         wall_clock_hz=None,
     ):
         if sample_rate <= 0:
@@ -44,6 +45,8 @@ class SNN2PerformanceMapper(wiring.Component):
             raise ValueError("control period must be at least 16 samples")
         if not 1 <= gate_high_samples <= control_period_samples:
             raise ValueError("gate high time must fit inside one control period")
+        if activity_stride <= 0:
+            raise ValueError("activity stride must be positive")
         if wall_clock_hz is not None and wall_clock_hz < 800:
             raise ValueError("wall clock must be at least 800 Hz")
         self.sample_rate = sample_rate
@@ -59,7 +62,12 @@ class SNN2PerformanceMapper(wiring.Component):
             if wall_clock_hz is None
             else round(sample_rate / 8)
         )
+        self.activity_stride = activity_stride
+        self.activity_period_observations = (
+            self.activity_period_samples + activity_stride - 1
+        ) // activity_stride
         self.control_counter = Signal(range(self.control_period_ticks))
+        self.activity_stride_counter = Signal(range(max(2, activity_stride)))
         self.step = Signal(4)
         self.gate_remaining = Signal(
             range(self.gate_high_ticks + 1), init=self.gate_high_ticks
@@ -70,10 +78,10 @@ class SNN2PerformanceMapper(wiring.Component):
             for value in (0x00000000, 0x55555555, 0xAAAAAAAA)
         ]
         self.excitatory_activity_sum = Signal(
-            range(192 * self.activity_period_samples + 1)
+            range(192 * self.activity_period_observations + 1)
         )
         self.inhibitory_activity_sum = Signal(
-            range(64 * self.activity_period_samples + 1)
+            range(64 * self.activity_period_observations + 1)
         )
         note_sets = (self.MELODY_NOTES, self.COUNTER_NOTES, self.BASS_NOTES)
         self._increments = tuple(
@@ -97,15 +105,15 @@ class SNN2PerformanceMapper(wiring.Component):
         pitch_values = Array(Const(value, signed(16)) for value in self.PITCH_ASQ)
         pattern_values = Array(Const(value, 4) for value in self.EUCLIDEAN_ORDER)
         next_indices = [Signal(3) for _ in range(3)]
-        maximum_population_sum = 256 * self.activity_period_samples
-        excitatory = Signal(range(192 * self.activity_period_samples + 1))
+        maximum_population_sum = 256 * self.activity_period_observations
+        excitatory = Signal(range(192 * self.activity_period_observations + 1))
         normalized_inhibitory = Signal(
-            range(192 * self.activity_period_samples + 1)
+            range(192 * self.activity_period_observations + 1)
         )
         total_activity = Signal(range(maximum_population_sum + 1))
         gate_density = Signal(4)
         transfer = Signal()
-        period = self.activity_period_samples
+        period = self.activity_period_observations
 
         def threshold_index(value, thresholds):
             result = Const(0, 3)
@@ -207,6 +215,7 @@ class SNN2PerformanceMapper(wiring.Component):
                 self.note_indices[0].eq(next_indices[0]),
                 self.note_indices[1].eq(next_indices[1]),
                 self.note_indices[2].eq(next_indices[2]),
+                self.activity_stride_counter.eq(0),
                 self.excitatory_activity_sum.eq(0),
                 self.inhibitory_activity_sum.eq(0),
                 self.gate_remaining.eq(Mux(
@@ -221,15 +230,24 @@ class SNN2PerformanceMapper(wiring.Component):
                 with m.If(self.gate_remaining != 0):
                     m.d.sync += self.gate_remaining.eq(self.gate_remaining - 1)
             with m.If(transfer):
-                m.d.sync += [
-                    self.excitatory_activity_sum.eq(
-                        self.excitatory_activity_sum
-                        + self.excitatory_spike_count
-                    ),
-                    self.inhibitory_activity_sum.eq(
-                        self.inhibitory_activity_sum
-                        + self.inhibitory_spike_count
-                    ),
-                ]
+                with m.If(self.activity_stride_counter == 0):
+                    m.d.sync += [
+                        self.excitatory_activity_sum.eq(
+                            self.excitatory_activity_sum
+                            + self.excitatory_spike_count
+                        ),
+                        self.inhibitory_activity_sum.eq(
+                            self.inhibitory_activity_sum
+                            + self.inhibitory_spike_count
+                        ),
+                    ]
+                with m.If(
+                    self.activity_stride_counter == self.activity_stride - 1
+                ):
+                    m.d.sync += self.activity_stride_counter.eq(0)
+                with m.Else():
+                    m.d.sync += self.activity_stride_counter.eq(
+                        self.activity_stride_counter + 1
+                    )
 
         return m
