@@ -60,7 +60,10 @@ class SNN2AVTop(Elaboratable):
         self.encoder = None if self_test else SNN2AudioEncoder(self.manifest)
         self.test_source = SNN2TestSource() if self_test else None
         self.dvi_tgen = dvi.DVITimingGen()
-        self.visualizer = SNN2Visualizer(external_rows=True)
+        self.visualizer = SNN2Visualizer(
+            external_rows=True,
+            additive_view=performance,
+        )
 
         self.video_r = Signal(8)
         self.video_g = Signal(8)
@@ -98,7 +101,7 @@ class SNN2AVTop(Elaboratable):
                     "stereo music L", "stereo music R",
                     "1V/oct melody", "density gate",
                 ],
-                io_right=["", "", "SNN2 music + CV", "", "", ""],
+                io_right=["", "", "1000-sine HDMI view", "", "", ""],
             )
         super().__init__()
 
