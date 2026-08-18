@@ -386,8 +386,9 @@ latched red fault indication for an event-count or deadline invariant failure.
 Music and modular-CV performance profile
 ----------------------------------------
 
-``--performance`` preserves the SNN2 core and DVI diagnostics but replaces the
-four calibrated output roles with a playable profile:
+``--performance`` preserves the SNN2 core and its compact DVI diagnostics but
+replaces the 16x16 population grid with an additive-synthesis view and replaces
+the four calibrated output roles with a playable profile:
 
 .. list-table:: SNN2 music/CV outputs
    :header-rows: 1
@@ -402,6 +403,37 @@ four calibrated output roles with a playable profile:
      - C-minor-pentatonic 1 V/oct pitch CV for the melody voice
    * - ``OUT 3``
      - bounded 0/5 V Euclidean activity-density gate
+
+Additive-synthesis HDMI view
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The performance view visualizes the standalone Mac additive demo as its exact
+structural product: five vertical chord-tone lanes, ten harmonic rows per lane,
+and twenty micro-sine particles per cell. The complete field therefore contains
+``5 * 10 * 20 = 1000`` visible oscillator particles. A brighter particle means
+that the corresponding measured encoder band is active. Color identifies its
+tone lane and harmonic row.
+
+The top eight bars are the actual 8-band energy values derived from ``IN 0``.
+Harmonic rows one through eight use the matching encoder band; the two highest
+rows share the highest band because the analogue link transports eight bands,
+not ten independent harmonic controls. The low horizontal bar below the field
+shows the measured lowest-band foundation. The three lower meters retain
+excitatory rate, inhibitory rate, and scheduler utilization, and the fault area
+still turns red for a scheduler invariant failure.
+
+Individual oscillator frequency, amplitude, and phase values are not sent from
+the Mac over the mono analogue link. Particle phase motion is consequently a
+deterministic structural animation made from frame, lane, harmonic, and
+micro-sine indices. It shall not be described as a measurement of the Mac's
+individual oscillator phases. Band brightness and the eight spectrum bars are
+measured; the particle phase choreography is illustrative. Neither path feeds
+back into neural or audio computation.
+
+For the demo patch, the stereo master remains on ``Loopback Audio 2`` while a
+separately switched, hard-limited ``+/-2 V`` mono copy leaves ES-9 physical
+``OUT 1`` and enters Tiliqua ``IN 0``. All other ES-9 output channels remain
+zero. Stopping the feed returns ``OUT 1`` to zero before closing its stream.
 
 The three voices are phase-continuous triangle oscillators. E activity selects
 the melody, I activity selects the counter-voice, and population-normalized E/I
