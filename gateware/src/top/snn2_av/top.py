@@ -155,8 +155,15 @@ class SNN2AVTop(Elaboratable):
             m.submodules.performance_mapper = performance_mapper = (
                 SNN2PerformanceMapper(
                     sample_rate=self.clock_settings.audio_clock.fs(),
-                    control_period_samples=512 if self.self_test else 6000,
-                    gate_high_samples=256 if self.self_test else 3000,
+                    # Shorten only transfer-count simulation so the 100 ms AV
+                    # regression observes several note/gate updates. Hardware
+                    # timing below remains an exact 8 Hz sync-domain clock.
+                    control_period_samples=(
+                        6000 if sim.is_hw(platform) else 512
+                    ),
+                    gate_high_samples=(
+                        3000 if sim.is_hw(platform) else 256
+                    ),
                     wall_clock_hz=(
                         int(self.clock_settings.frequencies.sync)
                         if sim.is_hw(platform)

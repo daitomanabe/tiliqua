@@ -133,7 +133,8 @@ int main(int argc, char** argv) {
         audio[channel] = measure_audio(i2s_driver.get_captured_samples(channel));
     }
 
-    bool passed = top.self_test_active;
+    const bool performance = top.performance_output_active != 0;
+    bool passed = top.self_test_active || performance;
     passed &= top.test_sample_index > 3000;
     passed &= dvi_driver.get_frame_count() >= 4;
     passed &= dvi_driver.get_pixel_count() > 1'500'000;
@@ -142,9 +143,9 @@ int main(int argc, char** argv) {
     passed &= dvi_driver.get_channel_max(2) - dvi_driver.get_channel_min(2) >= 16;
     passed &= !observed_fault;
     passed &= maximum_scheduler > 0 && maximum_scheduler <= 640;
-    passed &= maximum_excitatory > 0 && maximum_inhibitory > 0;
+    passed &= maximum_excitatory > 0;
+    passed &= !top.self_test_active || maximum_inhibitory > 0;
     passed &= band_activity_mask == 0xff;
-    const bool performance = top.performance_output_active != 0;
     if (performance) {
         for (int channel = 0; channel != 2; ++channel) {
             passed &= audio[channel].samples > 3000;
@@ -156,7 +157,15 @@ int main(int argc, char** argv) {
         }
         passed &= audio[2].minimum >= 0;
         passed &= audio[2].maximum <= 6000;
-        passed &= audio[2].nonzero > 1000;
+        passed &= audio[2].maximum >= 1000;
+        if (top.self_test_active) {
+            passed &= audio[2].nonzero > 1000;
+        } else {
+            // The live 640 Hz fixture must move the quantized pitch between
+            // its initial note and 0 V; silence alone cannot satisfy both.
+            passed &= audio[2].nonzero > 100;
+            passed &= audio[2].nonzero + 100 < audio[2].samples;
+        }
         passed &= audio[3].minimum >= 0;
         // The calibrated I2S model applies the codec path's approximately
         // 0.9 gain, so an internal 20,000-count (+5 V) gate captures near
