@@ -15,6 +15,7 @@ from tiliqua.snn2 import (
     ALIFState,
     SNN2EncoderReference,
     SNN2ManifestError,
+    SNN2PerformanceMapper,
     SNN2Reference,
     canonical_payload_sha256,
     compile_edge_banks,
@@ -379,6 +380,85 @@ class SNN2EncoderTests(unittest.TestCase):
                 ctx.set(dut.o.ready, 1)
                 await ctx.tick()
                 ctx.set(dut.o.ready, 0)
+
+        sim = Simulator(dut)
+        sim.add_clock(1e-6)
+        sim.add_testbench(bench)
+        sim.run()
+
+
+class SNN2PerformanceMapperTests(unittest.TestCase):
+
+    def test_stereo_pitch_gate_and_backpressure_contract(self):
+        dut = SNN2PerformanceMapper(
+            control_period_samples=16,
+            gate_high_samples=8,
+        )
+        outputs = [[], [], [], []]
+        observed_indices = set()
+
+        async def bench(ctx):
+            ctx.set(dut.i.valid, 1)
+            ctx.set(dut.o.ready, 1)
+            for sample in range(4096):
+                activity = (
+                    (2, 1),
+                    (10, 3),
+                    (26, 10),
+                    (15, 6),
+                )[(sample // 64) % 4]
+                ctx.set(dut.excitatory_spike_count, activity[0])
+                ctx.set(dut.inhibitory_spike_count, activity[1])
+                await ctx.tick()
+                for channel in range(4):
+                    outputs[channel].append(
+                        ctx.get(dut.o.payload[channel].as_value())
+                    )
+                observed_indices.add(ctx.get(dut.note_indices[0]))
+
+            phases_before_stall = tuple(ctx.get(phase) for phase in dut.phases)
+            ctx.set(dut.o.ready, 0)
+            for _ in range(32):
+                await ctx.tick()
+            self.assertEqual(
+                tuple(ctx.get(phase) for phase in dut.phases),
+                phases_before_stall,
+            )
+            self.assertEqual(ctx.get(dut.i.ready), 0)
+
+        sim = Simulator(dut)
+        sim.add_clock(1e-6)
+        sim.add_testbench(bench)
+        sim.run()
+
+        for channel in (0, 1):
+            self.assertLessEqual(
+                max(abs(value) for value in outputs[channel]), 16_384
+            )
+            self.assertLess(min(outputs[channel]), -4_000)
+            self.assertGreater(max(outputs[channel]), 4_000)
+        self.assertGreaterEqual(len(observed_indices), 4)
+        self.assertTrue(set(outputs[2]).issubset(dut.PITCH_ASQ))
+        self.assertGreaterEqual(len(set(outputs[2])), 4)
+        self.assertEqual(set(outputs[3]), {0, dut.FIVE_VOLTS_ASQ})
+
+    def test_wall_clock_control_advances_while_stream_is_stalled(self):
+        dut = SNN2PerformanceMapper(wall_clock_hz=800)
+
+        async def bench(ctx):
+            ctx.set(dut.i.valid, 1)
+            ctx.set(dut.o.ready, 0)
+            ctx.set(dut.excitatory_spike_count, 30)
+            ctx.set(dut.inhibitory_spike_count, 10)
+            phases_before = tuple(ctx.get(phase) for phase in dut.phases)
+            for _ in range(101):
+                await ctx.tick()
+            self.assertEqual(ctx.get(dut.step), 1)
+            self.assertEqual(ctx.get(dut.note_indices[0]), 7)
+            self.assertGreater(ctx.get(dut.gate_remaining), 0)
+            self.assertEqual(
+                tuple(ctx.get(phase) for phase in dut.phases), phases_before
+            )
 
         sim = Simulator(dut)
         sim.add_clock(1e-6)

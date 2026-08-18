@@ -12,6 +12,7 @@ from .manifest import (
     make_default_manifest,
     validate_manifest,
 )
+from .performance import SNN2PerformanceMapper
 from .reference import (
     ALIFState,
     SNN2EncoderOutput,
@@ -27,6 +28,7 @@ __all__ = [
     "SNN2EncoderOutput",
     "SNN2EncoderReference",
     "SNN2Reference",
+    "SNN2PerformanceMapper",
     "canonical_payload_sha256",
     "compile_edge_banks",
     "export_manifest",
