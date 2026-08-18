@@ -37,6 +37,7 @@ class SNN2PerformanceMapper(wiring.Component):
         control_period_samples=6000,
         gate_high_samples=3000,
         activity_stride=31,
+        activity_profile="sparse",
         wall_clock_hz=None,
     ):
         if sample_rate <= 0:
@@ -47,6 +48,8 @@ class SNN2PerformanceMapper(wiring.Component):
             raise ValueError("gate high time must fit inside one control period")
         if activity_stride <= 0:
             raise ValueError("activity stride must be positive")
+        if activity_profile not in {"sparse", "dense"}:
+            raise ValueError("activity profile must be sparse or dense")
         if wall_clock_hz is not None and wall_clock_hz < 800:
             raise ValueError("wall clock must be at least 800 Hz")
         self.sample_rate = sample_rate
@@ -63,6 +66,7 @@ class SNN2PerformanceMapper(wiring.Component):
             else round(sample_rate / 8)
         )
         self.activity_stride = activity_stride
+        self.activity_profile = activity_profile
         self.activity_period_observations = (
             self.activity_period_samples + activity_stride - 1
         ) // activity_stride
@@ -130,15 +134,37 @@ class SNN2PerformanceMapper(wiring.Component):
                 )
             return result
 
+        if self.activity_profile == "sparse":
+            melody_thresholds = (
+                (1, 64), (1, 32), (1, 16), (1, 8), (1, 4), (1, 2), (1, 1)
+            )
+            counter_thresholds = (
+                (1, 128), (1, 64), (1, 32), (1, 16), (1, 8), (1, 4), (1, 2)
+            )
+            density_thresholds = (
+                (1, 100, 3),
+                (1, 40, 4),
+                (1, 20, 6),
+                (1, 10, 8),
+                (1, 5, 10),
+                (2, 5, 12),
+            )
+            inhibitory_balance_thresholds = ((1, 2), (1, 4), (1, 16))
+            excitatory_balance_thresholds = ((1, 1), (1, 2), (1, 4), (1, 16))
+        else:
+            melody_thresholds = tuple((value, 1) for value in (3, 6, 9, 12, 16, 20, 24))
+            counter_thresholds = tuple((value, 1) for value in (2, 3, 4, 5, 6, 7, 8))
+            density_thresholds = tuple(
+                (threshold, 1, density)
+                for threshold, density in (
+                    (4, 3), (8, 4), (12, 6), (16, 8), (20, 10), (24, 12)
+                )
+            )
+            inhibitory_balance_thresholds = ((16, 1), (8, 1), (3, 1))
+            excitatory_balance_thresholds = ((24, 1), (16, 1), (8, 1), (3, 1))
+
         density_value = Const(2, 4)
-        for numerator, denominator, density in (
-            (1, 100, 3),
-            (1, 40, 4),
-            (1, 20, 6),
-            (1, 10, 8),
-            (1, 5, 10),
-            (2, 5, 12),
-        ):
+        for numerator, denominator, density in density_thresholds:
             density_value = Mux(
                 total_activity >= average_threshold(numerator, denominator),
                 density,
@@ -159,30 +185,37 @@ class SNN2PerformanceMapper(wiring.Component):
             ),
             next_indices[0].eq(threshold_index(
                 excitatory,
-                ((1, 64), (1, 32), (1, 16), (1, 8), (1, 4), (1, 2), (1, 1)),
+                melody_thresholds,
             )),
             next_indices[1].eq(threshold_index(
                 self.inhibitory_activity_sum,
-                ((1, 128), (1, 64), (1, 32), (1, 16), (1, 8), (1, 4), (1, 2)),
+                counter_thresholds,
             )),
             next_indices[2].eq(Mux(
                 normalized_inhibitory
-                >= excitatory + average_threshold(1, 2),
+                >= excitatory + average_threshold(*inhibitory_balance_thresholds[0]),
                 0,
                 Mux(normalized_inhibitory
-                    >= excitatory + average_threshold(1, 4), 1,
+                    >= excitatory
+                    + average_threshold(*inhibitory_balance_thresholds[1]), 1,
                     Mux(normalized_inhibitory
-                        >= excitatory + average_threshold(1, 16), 2,
+                        >= excitatory
+                        + average_threshold(*inhibitory_balance_thresholds[2]), 2,
                         Mux(excitatory
-                            >= normalized_inhibitory + average_threshold(1, 1), 7,
+                            >= normalized_inhibitory
+                            + average_threshold(*excitatory_balance_thresholds[0]), 7,
                             Mux(excitatory
-                                >= normalized_inhibitory + average_threshold(1, 2), 6,
+                                >= normalized_inhibitory
+                                + average_threshold(*excitatory_balance_thresholds[1]), 6,
                                 Mux(excitatory
-                                    >= normalized_inhibitory + average_threshold(1, 4), 5,
+                                    >= normalized_inhibitory
+                                    + average_threshold(*excitatory_balance_thresholds[2]), 5,
                                     Mux(
                                         excitatory
                                         >= normalized_inhibitory
-                                        + average_threshold(1, 16),
+                                        + average_threshold(
+                                            *excitatory_balance_thresholds[3]
+                                        ),
                                         4,
                                         3,
                                     )))))),
