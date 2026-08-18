@@ -393,6 +393,7 @@ class SNN2PerformanceMapperTests(unittest.TestCase):
         dut = SNN2PerformanceMapper(
             control_period_samples=16,
             gate_high_samples=8,
+            activity_stride=1,
         )
         outputs = [[], [], [], []]
         observed_indices = set()
@@ -401,12 +402,13 @@ class SNN2PerformanceMapperTests(unittest.TestCase):
             ctx.set(dut.i.valid, 1)
             ctx.set(dut.o.ready, 1)
             for sample in range(4096):
+                profile = (sample // 64) % 4
                 activity = (
-                    (2, 1),
-                    (10, 3),
-                    (26, 10),
-                    (15, 6),
-                )[(sample // 64) % 4]
+                    (0, 0),
+                    (int(sample % 16 == 0), int(sample % 32 == 0)),
+                    (int(sample % 4 == 0), int(sample % 8 == 0)),
+                    (1, int(sample % 2 == 0)),
+                )[profile]
                 ctx.set(dut.excitatory_spike_count, activity[0])
                 ctx.set(dut.inhibitory_spike_count, activity[1])
                 await ctx.tick()
@@ -441,6 +443,32 @@ class SNN2PerformanceMapperTests(unittest.TestCase):
         self.assertTrue(set(outputs[2]).issubset(dut.PITCH_ASQ))
         self.assertGreaterEqual(len(set(outputs[2])), 4)
         self.assertEqual(set(outputs[3]), {0, dut.FIVE_VOLTS_ASQ})
+
+    def test_sparse_interval_activity_reaches_musical_cv_ranges(self):
+        dut = SNN2PerformanceMapper(
+            control_period_samples=64,
+            gate_high_samples=32,
+            activity_stride=1,
+        )
+
+        async def bench(ctx):
+            ctx.set(dut.i.valid, 1)
+            ctx.set(dut.o.ready, 1)
+            for _ in range(64):
+                await ctx.tick()
+            self.assertEqual(ctx.get(dut.note_indices[0]), 0)
+
+            for sample in range(64):
+                ctx.set(dut.excitatory_spike_count, int(sample % 4 == 0))
+                await ctx.tick()
+
+            self.assertGreaterEqual(ctx.get(dut.note_indices[0]), 5)
+            self.assertGreater(ctx.get(dut.gate_remaining), 0)
+
+        sim = Simulator(dut)
+        sim.add_clock(1e-6)
+        sim.add_testbench(bench)
+        sim.run()
 
     def test_wall_clock_control_advances_while_stream_is_stalled(self):
         dut = SNN2PerformanceMapper(sample_rate=800, wall_clock_hz=800)

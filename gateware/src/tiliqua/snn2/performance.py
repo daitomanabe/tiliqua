@@ -36,7 +36,7 @@ class SNN2PerformanceMapper(wiring.Component):
         sample_rate=48_000,
         control_period_samples=6000,
         gate_high_samples=3000,
-        activity_stride=32,
+        activity_stride=31,
         wall_clock_hz=None,
     ):
         if sample_rate <= 0:
@@ -115,18 +115,34 @@ class SNN2PerformanceMapper(wiring.Component):
         transfer = Signal()
         period = self.activity_period_observations
 
+        def average_threshold(numerator, denominator):
+            return (numerator * period + denominator - 1) // denominator
+
         def threshold_index(value, thresholds):
             result = Const(0, 3)
-            for index, threshold in enumerate(thresholds, start=1):
-                result = Mux(value >= threshold * period, index, result)
+            for index, (numerator, denominator) in enumerate(
+                thresholds, start=1
+            ):
+                result = Mux(
+                    value >= average_threshold(numerator, denominator),
+                    index,
+                    result,
+                )
             return result
 
         density_value = Const(2, 4)
-        for threshold, density in (
-            (4, 3), (8, 4), (12, 6), (16, 8), (20, 10), (24, 12)
+        for numerator, denominator, density in (
+            (1, 100, 3),
+            (1, 40, 4),
+            (1, 20, 6),
+            (1, 10, 8),
+            (1, 5, 10),
+            (2, 5, 12),
         ):
             density_value = Mux(
-                total_activity >= threshold * period, density, density_value
+                total_activity >= average_threshold(numerator, denominator),
+                density,
+                density_value,
             )
 
         m.d.comb += [
@@ -142,22 +158,31 @@ class SNN2PerformanceMapper(wiring.Component):
                 self.excitatory_activity_sum + self.inhibitory_activity_sum
             ),
             next_indices[0].eq(threshold_index(
-                excitatory, (3, 6, 9, 12, 16, 20, 24)
+                excitatory,
+                ((1, 64), (1, 32), (1, 16), (1, 8), (1, 4), (1, 2), (1, 1)),
             )),
             next_indices[1].eq(threshold_index(
-                self.inhibitory_activity_sum, (2, 3, 4, 5, 6, 7, 8)
+                self.inhibitory_activity_sum,
+                ((1, 128), (1, 64), (1, 32), (1, 16), (1, 8), (1, 4), (1, 2)),
             )),
             next_indices[2].eq(Mux(
-                normalized_inhibitory >= excitatory + 16 * period,
+                normalized_inhibitory
+                >= excitatory + average_threshold(1, 2),
                 0,
-                Mux(normalized_inhibitory >= excitatory + 8 * period, 1,
-                    Mux(normalized_inhibitory >= excitatory + 3 * period, 2,
-                        Mux(excitatory >= normalized_inhibitory + 24 * period, 7,
-                            Mux(excitatory >= normalized_inhibitory + 16 * period, 6,
-                                Mux(excitatory >= normalized_inhibitory + 8 * period, 5,
+                Mux(normalized_inhibitory
+                    >= excitatory + average_threshold(1, 4), 1,
+                    Mux(normalized_inhibitory
+                        >= excitatory + average_threshold(1, 16), 2,
+                        Mux(excitatory
+                            >= normalized_inhibitory + average_threshold(1, 1), 7,
+                            Mux(excitatory
+                                >= normalized_inhibitory + average_threshold(1, 2), 6,
+                                Mux(excitatory
+                                    >= normalized_inhibitory + average_threshold(1, 4), 5,
                                     Mux(
                                         excitatory
-                                        >= normalized_inhibitory + 3 * period,
+                                        >= normalized_inhibitory
+                                        + average_threshold(1, 16),
                                         4,
                                         3,
                                     )))))),
