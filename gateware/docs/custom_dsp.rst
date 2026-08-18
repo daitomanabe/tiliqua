@@ -342,7 +342,7 @@ It looks like the audio outputs are evolving as we want. Next, we can build a bi
 
     $ pdm dsp build --dsp-core=lorenz --verbose
     ...
-    Saved to '/home/seb/dev/tiliqua/gateware/build/dsp-lorenz-r5/dsp-lorenz-c3bf5dbf-r5.tar.gz'
+    Saved to '{repo_path}/build/dsp-lorenz-r5/dsp-lorenz-c3bf5dbf-r5.tar.gz'
 
 Which we can upload to a bitstream slot of our choosing:
 
@@ -466,4 +466,3 @@ Adding more blocks
 .. warning::
 
     **TODO: write this section on adding more DSP blocks to the above example**.
-

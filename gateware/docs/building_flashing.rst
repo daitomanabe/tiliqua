@@ -63,7 +63,7 @@ After a while, you should see something like:
       top.bit       122 KiB
       manifest.json    0 KiB
     <...>
-    Saved to '/Users/seb/dev/tiliqua/gateware/build/dsp-mirror-r5/dsp-mirror-9cd67c90-r5.tar.gz'
+    Saved to '{repo_path}/build/dsp-mirror-r5/dsp-mirror-9cd67c90-r5.tar.gz'
 
 As we have built a simple audio-only bitstream without a CPU, there are only 2 artifacts produced:
 
