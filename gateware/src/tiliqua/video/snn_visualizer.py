@@ -12,7 +12,7 @@ class SNNVisualizer(Elaboratable):
 
     def __init__(
         self, *, neuron_count=64, membrane_level_bits=4, external_rows=False,
-        inhibitory_stride=None,
+        external_row_neurons=32, inhibitory_stride=None,
     ):
         if neuron_count not in (64, 128, 256, 512, 1024):
             raise ValueError(
@@ -23,6 +23,9 @@ class SNNVisualizer(Elaboratable):
             raise ValueError("membrane_level_bits must be 2 or 4")
         self.membrane_level_bits = membrane_level_bits
         self.external_rows = external_rows
+        if external_row_neurons not in (16, 32):
+            raise ValueError("external_row_neurons must be 16 or 32")
+        self.external_row_neurons = external_row_neurons
         if inhibitory_stride is not None and inhibitory_stride != 4:
             raise ValueError("only an inhibitory stride of four is supported")
         self.inhibitory_stride = inhibitory_stride
@@ -41,8 +44,12 @@ class SNNVisualizer(Elaboratable):
         self.control_override = Signal(4)
         self.control_levels = Signal(32)
         self.neuron_index = Signal(range(neuron_count))
-        self.external_row_addr = Signal(range(max(2, neuron_count // 32)))
-        self.external_row_data = Signal(32 * (1 + membrane_level_bits))
+        self.external_row_addr = Signal(range(max(
+            2, neuron_count // external_row_neurons
+        )))
+        self.external_row_data = Signal(
+            external_row_neurons * (1 + membrane_level_bits)
+        )
         self.r = Signal(8)
         self.g = Signal(8)
         self.b = Signal(8)
@@ -79,7 +86,11 @@ class SNNVisualizer(Elaboratable):
                 local_x[self.x_cell_shift:9],
                 local_y[self.y_cell_shift:9],
             )),
-            self.external_row_addr.eq(self.neuron_index[5:]),
+            self.external_row_addr.eq(
+                self.neuron_index[4:]
+                if self.external_row_neurons == 16
+                else self.neuron_index[5:]
+            ),
             cell_edge.eq(
                 (local_x[0:self.x_cell_shift] < 2)
                 | (local_x[0:self.x_cell_shift] >= (1 << self.x_cell_shift) - 2)
@@ -112,7 +123,10 @@ class SNNVisualizer(Elaboratable):
             selected_display = Signal(1 + self.membrane_level_bits)
             m.d.comb += [
                 selected_display.eq(self.external_row_data.word_select(
-                    self.neuron_index[:5], 1 + self.membrane_level_bits
+                    self.neuron_index[
+                        :4 if self.external_row_neurons == 16 else 5
+                    ],
+                    1 + self.membrane_level_bits,
                 )),
                 selected_spike.eq(selected_display[0]),
                 selected_level.eq(selected_display[1:]),

@@ -1,0 +1,48 @@
+{
+  "schema_version": 1,
+  "profile": "snn2_256x16_sparse_alif_v1",
+  "cases": [
+    {
+      "name": "threshold_equality",
+      "initial": {"v": 0, "ie": 0, "ii": 0, "a": 0, "r": 0, "s": 0},
+      "input": {"excitatory_events": 0, "inhibitory_events": 0, "external_drive": 100, "bias": 0, "adaptation_gain_q8": 256},
+      "dynamics": {"tau_e": 2, "tau_i": 2, "tau_a": 2, "tau_m": 2, "threshold_base": 100, "reset_level": 0, "adaptation_step": 10, "refractory_samples": 2},
+      "expected": {"v": 0, "ie": 0, "ii": 0, "a": 10, "r": 2, "s": 1}
+    },
+    {
+      "name": "positive_saturation",
+      "initial": {"v": 131071, "ie": 65535, "ii": 0, "a": 2, "r": 0, "s": 0},
+      "input": {"excitatory_events": 65535, "inhibitory_events": 0, "external_drive": 131071, "bias": 131071, "adaptation_gain_q8": 256},
+      "dynamics": {"tau_e": 10, "tau_i": 10, "tau_a": 10, "tau_m": 10, "threshold_base": 131071, "reset_level": 0, "adaptation_step": 1, "refractory_samples": 1},
+      "expected": {"v": 131071, "ie": 65535, "ii": 0, "a": 2, "r": 0, "s": 0}
+    },
+    {
+      "name": "negative_saturation",
+      "initial": {"v": -131072, "ie": 0, "ii": 65535, "a": 0, "r": 0, "s": 0},
+      "input": {"excitatory_events": 0, "inhibitory_events": 65535, "external_drive": -131072, "bias": -131072, "adaptation_gain_q8": 256},
+      "dynamics": {"tau_e": 10, "tau_i": 10, "tau_a": 10, "tau_m": 2, "threshold_base": 1000, "reset_level": 0, "adaptation_step": 1, "refractory_samples": 1},
+      "expected": {"v": -131072, "ie": 0, "ii": 65535, "a": 0, "r": 0, "s": 0}
+    },
+    {
+      "name": "refractory_decay",
+      "initial": {"v": 500, "ie": 1000, "ii": 500, "a": 256, "r": 2, "s": 1},
+      "input": {"excitatory_events": 100, "inhibitory_events": 50, "external_drive": 100, "bias": 20, "adaptation_gain_q8": 256},
+      "dynamics": {"tau_e": 2, "tau_i": 2, "tau_a": 2, "tau_m": 2, "threshold_base": 100, "reset_level": -7, "adaptation_step": 10, "refractory_samples": 3},
+      "expected": {"v": -7, "ie": 850, "ii": 425, "a": 192, "r": 1, "s": 0}
+    },
+    {
+      "name": "adaptation_saturation",
+      "initial": {"v": 0, "ie": 0, "ii": 0, "a": 65535, "r": 0, "s": 0},
+      "input": {"excitatory_events": 0, "inhibitory_events": 0, "external_drive": 65535, "bias": 100, "adaptation_gain_q8": 512},
+      "dynamics": {"tau_e": 2, "tau_i": 2, "tau_a": 10, "tau_m": 2, "threshold_base": 100, "reset_level": 0, "adaptation_step": 512, "refractory_samples": 15},
+      "expected": {"v": 0, "ie": 0, "ii": 0, "a": 65535, "r": 15, "s": 1}
+    },
+    {
+      "name": "negative_arithmetic_shift",
+      "initial": {"v": -100, "ie": 0, "ii": 0, "a": 0, "r": 0, "s": 0},
+      "input": {"excitatory_events": 0, "inhibitory_events": 0, "external_drive": 0, "bias": 0, "adaptation_gain_q8": 256},
+      "dynamics": {"tau_e": 2, "tau_i": 2, "tau_a": 2, "tau_m": 2, "threshold_base": 100, "reset_level": 0, "adaptation_step": 1, "refractory_samples": 1},
+      "expected": {"v": -75, "ie": 0, "ii": 0, "a": 0, "r": 0, "s": 0}
+    }
+  ]
+}

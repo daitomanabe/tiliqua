@@ -296,11 +296,15 @@ def top_level_cli(
 
     if args.action == CliAction.Build:
 
+        nextpnr_opts = "--timing-allow-fail"
+        if getattr(args, "nextpnr_seed", None) is not None:
+            nextpnr_opts += f" --seed {args.nextpnr_seed}"
+
         build_flags = {
             "build_dir": build_path,
             "verbose": args.verbose,
             "debug_verilog": args.debug_verilog,
-            "nextpnr_opts": "--timing-allow-fail",
+            "nextpnr_opts": nextpnr_opts,
             "ecppack_opts": f"--freq 38.8 --compress --bootaddr {args.bootaddr}"
         }
 
