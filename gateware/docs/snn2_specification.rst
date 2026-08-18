@@ -54,11 +54,15 @@ The all-neurons-spike RTL fixture issues all 2,048 events in 531 scheduler
 cycles and commits one sample in 613 sync cycles, within the 640- and
 1,250-cycle limits. These are simulation results.
 
-The latest self-test R5 build closes sync at 76.18 MHz with 61% physical COMB;
-the live-input build closes sync at 70.93 MHz with 68% physical COMB. Both
-also pass audio, DVI, DVI5x, FF, BRAM, and DSP limits. These are local
-simulation and place-and-route results: neither bitstream has been loaded onto
-the FPGA. Volatile SRAM validation and the trained manifest remain named gates.
+The SNN2 music/CV self-test build at commit ``b96f382`` closes sync at
+71.86 MHz with 61% physical COMB. Its live-input counterpart closes sync at
+63.04 MHz with 71% physical COMB. Both also pass audio, DVI, DVI5x, FF, BRAM,
+and DSP limits. The SHA-pinned bitstreams were loaded through ``FLASH / DEBUG``
+to volatile SRAM and measured through the fixed ES-9 fixture; SPI flash was not
+written. The self-test returned dynamic stereo audio, ``+0.587..+1.249 V``
+pitch CV, and a ``0/5 V`` gate. The live test changed pitch by ``+0.992 V`` and
+gate density by ``+0.227`` between the frozen low/high drive profiles. The
+trained manifest remains a named gate.
 The full 4,096-sample all-state/event RTL comparison and frozen low, medium,
 and high population-rate ranges run locally. See :doc:`snn2_v1_reference_rtl`
 for commands and the exact validation scope.
@@ -363,6 +367,48 @@ but it must not feed back into neural computation. A visible diagnostic area
 shall include input-band activity, E/I rates, scheduler utilization, and a
 latched red fault indication for an event-count or deadline invariant failure.
 
+Music and modular-CV performance profile
+----------------------------------------
+
+``--performance`` preserves the SNN2 core and DVI diagnostics but replaces the
+four calibrated output roles with a playable profile:
+
+.. list-table:: SNN2 music/CV outputs
+   :header-rows: 1
+
+   * - Output
+     - Meaning
+   * - ``OUT 0``
+     - stereo music left: excitatory melody plus shared bass
+   * - ``OUT 1``
+     - stereo music right: inhibitory counter-voice plus shared bass
+   * - ``OUT 2``
+     - C-minor-pentatonic 1 V/oct pitch CV for the melody voice
+   * - ``OUT 3``
+     - bounded 0/5 V Euclidean activity-density gate
+
+The three voices are phase-continuous triangle oscillators. E activity selects
+the melody, I activity selects the counter-voice, and population-normalized E/I
+balance selects the bass. Musical control advances at exactly 8 Hz from the
+sync-domain wall clock; audio phase advances only on accepted stream transfers,
+so backpressure cannot skip state or run an oscillator ahead of the stream.
+
+Live input uses the ``sparse`` activity profile. It observes every 31st neural
+sample across each 125 ms interval, accumulates E/I activity, and maps fractional
+average firing rates into seven pitch and density bands. The prime stride avoids
+locking the observation phase to the 16-lane scheduler. The frozen sparse range
+starts below one spike per sample because physical characterization measured a
+high-drive E-rate change of approximately 0.28 spikes/sample.
+
+Self-test uses the ``instantaneous`` profile. Its deterministic source reaches
+a much denser steady state, so averaging a complete interval would collapse the
+pitch to one constant note. Sampling the current E/I counts at each 8 Hz boundary
+retains a dynamic CV regression while leaving the live mapping unchanged.
+
+The normal SNN2 output contract above remains the default when ``--performance``
+is absent. Performance mode is therefore an explicit build profile rather than
+a silent change to existing SNN2 bitstreams.
+
 Training and manifest format
 ============================
 
@@ -455,6 +501,10 @@ tested, and included in ``pyproject.toml`` or the management CLI. From
    $ pdm snn2_lab stress
    $ pdm snn2_lab check
    $ pdm snn2_lab --with-build check
+   $ pdm snn2_lab performance
+   $ pdm snn2_lab performance-live
+   $ pdm snn2_lab --with-build performance
+   $ pdm snn2_lab --with-build performance-live
    $ pdm snn2_lab import-manifest /absolute/path/to/network.json
    $ pdm snn2_lab report
 
@@ -467,15 +517,18 @@ uses the default seed.
 ``quick`` runs unit and bit-equivalence tests. ``stress`` runs the worst-case
 scheduler and saturation fixtures. ``check`` adds AV integration. The
 ``--with-build`` form adds synthesis, place-and-route, and QoR enforcement.
+``performance`` and ``performance-live`` apply the music/CV AV contracts to the
+self-test and calibrated live-input profiles respectively. Their
+``--with-build`` forms additionally enforce the R5 QoR ceilings.
 ``import-manifest`` validates and derives artifacts but never programs hardware.
 
-Future management-repository commands are intentionally separate from the
-existing SNN commands:
+Management-repository commands remain separate from the existing SNN commands:
 
 .. code-block:: console
 
    $ bin/tiliqua snn2-test --bitstream /absolute/path/to/top.bit
-   $ bin/tiliqua snn2-live-test --bitstream /absolute/path/to/top.bit
+   $ bin/tiliqua snn2-performance-test --bitstream /absolute/path/to/top.bit
+   $ bin/tiliqua snn2-performance-live-test --bitstream /absolute/path/to/top.bit
 
 They must require an explicit candidate bitstream until a specific SHA has
 passed self-test, live response, control response, and output-safety gates in
