@@ -78,7 +78,9 @@ class SNN2PerformanceMapper(wiring.Component):
         self.gate_remaining = Signal(
             range(self.gate_high_ticks + 1), init=self.gate_high_ticks
         )
-        self.note_indices = [Signal(3, init=2) for _ in range(3)]
+        self.note_indices = [
+            Signal(3, init=value) for value in (0, 2, 2)
+        ]
         self.phases = [
             Signal(32, init=value)
             for value in (0x00000000, 0x55555555, 0xAAAAAAAA)
@@ -111,6 +113,7 @@ class SNN2PerformanceMapper(wiring.Component):
         pitch_values = Array(Const(value, signed(16)) for value in self.PITCH_ASQ)
         pattern_values = Array(Const(value, 4) for value in self.EUCLIDEAN_ORDER)
         next_indices = [Signal(3) for _ in range(3)]
+        slewed_indices = [Signal(3) for _ in range(3)]
         maximum_population_sum = 256 * self.activity_period_observations
         excitatory = Signal(range(192 * self.activity_period_observations + 1))
         normalized_inhibitory = Signal(
@@ -243,6 +246,16 @@ class SNN2PerformanceMapper(wiring.Component):
                                         3,
                                     )))))),
             )),
+            *(
+                slewed.eq(Mux(
+                    target > current,
+                    current + 1,
+                    Mux(target < current, current - 1, current),
+                ))
+                for current, target, slewed in zip(
+                    self.note_indices, next_indices, slewed_indices
+                )
+            ),
             gate_density.eq(density_value),
             self.o.payload[2].as_value().eq(pitch_values[self.note_indices[0]]),
             self.o.payload[3].as_value().eq(Mux(
@@ -293,9 +306,9 @@ class SNN2PerformanceMapper(wiring.Component):
             m.d.sync += [
                 self.control_counter.eq(0),
                 self.step.eq(self.step + 1),
-                self.note_indices[0].eq(next_indices[0]),
-                self.note_indices[1].eq(next_indices[1]),
-                self.note_indices[2].eq(next_indices[2]),
+                self.note_indices[0].eq(slewed_indices[0]),
+                self.note_indices[1].eq(slewed_indices[1]),
+                self.note_indices[2].eq(slewed_indices[2]),
                 self.activity_stride_counter.eq(0),
                 self.excitatory_activity_sum.eq(0),
                 self.inhibitory_activity_sum.eq(0),

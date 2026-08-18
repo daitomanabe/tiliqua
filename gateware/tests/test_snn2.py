@@ -458,12 +458,15 @@ class SNN2PerformanceMapperTests(unittest.TestCase):
                 await ctx.tick()
             self.assertEqual(ctx.get(dut.note_indices[0]), 0)
 
-            for sample in range(64):
-                ctx.set(dut.excitatory_spike_count, int(sample % 4 == 0))
-                await ctx.tick()
+            saw_gate = False
+            for _ in range(5):
+                for sample in range(64):
+                    ctx.set(dut.excitatory_spike_count, int(sample % 4 == 0))
+                    await ctx.tick()
+                    saw_gate |= ctx.get(dut.gate_remaining) > 0
 
             self.assertGreaterEqual(ctx.get(dut.note_indices[0]), 5)
-            self.assertGreater(ctx.get(dut.gate_remaining), 0)
+            self.assertTrue(saw_gate)
 
         sim = Simulator(dut)
         sim.add_clock(1e-6)
@@ -499,6 +502,35 @@ class SNN2PerformanceMapperTests(unittest.TestCase):
         sim.run()
         self.assertGreaterEqual(len(observed_indices), 4)
 
+    def test_note_indices_slew_one_scale_step_toward_activity_target(self):
+        dut = SNN2PerformanceMapper(
+            control_period_samples=16,
+            gate_high_samples=8,
+            activity_profile="instantaneous",
+        )
+
+        async def advance_period(ctx, excitatory, inhibitory):
+            ctx.set(dut.excitatory_spike_count, excitatory)
+            ctx.set(dut.inhibitory_spike_count, inhibitory)
+            for _ in range(16):
+                await ctx.tick()
+
+        async def bench(ctx):
+            ctx.set(dut.i.valid, 1)
+            ctx.set(dut.o.ready, 1)
+
+            for expected in (1, 2, 3, 4, 5, 6, 7):
+                await advance_period(ctx, 30, 10)
+                self.assertEqual(ctx.get(dut.note_indices[0]), expected)
+
+            await advance_period(ctx, 0, 0)
+            self.assertEqual(ctx.get(dut.note_indices[0]), 6)
+
+        sim = Simulator(dut)
+        sim.add_clock(1e-6)
+        sim.add_testbench(bench)
+        sim.run()
+
     def test_wall_clock_control_advances_while_stream_is_stalled(self):
         dut = SNN2PerformanceMapper(sample_rate=800, wall_clock_hz=800)
 
@@ -514,7 +546,7 @@ class SNN2PerformanceMapperTests(unittest.TestCase):
             for _ in range(2):
                 await ctx.tick()
             self.assertEqual(ctx.get(dut.step), 1)
-            self.assertEqual(ctx.get(dut.note_indices[0]), 7)
+            self.assertEqual(ctx.get(dut.note_indices[0]), 1)
             self.assertGreater(ctx.get(dut.gate_remaining), 0)
             self.assertEqual(
                 tuple(ctx.get(phase) for phase in dut.phases), phases_before
