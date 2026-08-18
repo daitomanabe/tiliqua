@@ -54,6 +54,11 @@ class SNN2PerformanceMapper(wiring.Component):
         else:
             self.control_period_ticks = round(wall_clock_hz / 8)
             self.gate_high_ticks = round(wall_clock_hz / 16)
+        self.activity_period_samples = (
+            control_period_samples
+            if wall_clock_hz is None
+            else round(sample_rate / 8)
+        )
         self.control_counter = Signal(range(self.control_period_ticks))
         self.step = Signal(4)
         self.gate_remaining = Signal(
@@ -64,6 +69,12 @@ class SNN2PerformanceMapper(wiring.Component):
             Signal(32, init=value)
             for value in (0x00000000, 0x55555555, 0xAAAAAAAA)
         ]
+        self.excitatory_activity_sum = Signal(
+            range(192 * self.activity_period_samples + 1)
+        )
+        self.inhibitory_activity_sum = Signal(
+            range(64 * self.activity_period_samples + 1)
+        )
         note_sets = (self.MELODY_NOTES, self.COUNTER_NOTES, self.BASS_NOTES)
         self._increments = tuple(
             tuple(midi_note_phase_increment(note, sample_rate) for note in notes)
@@ -86,54 +97,64 @@ class SNN2PerformanceMapper(wiring.Component):
         pitch_values = Array(Const(value, signed(16)) for value in self.PITCH_ASQ)
         pattern_values = Array(Const(value, 4) for value in self.EUCLIDEAN_ORDER)
         next_indices = [Signal(3) for _ in range(3)]
-        excitatory = Signal(9)
-        normalized_inhibitory = Signal(9)
-        total_activity = Signal(9)
+        maximum_population_sum = 256 * self.activity_period_samples
+        excitatory = Signal(range(192 * self.activity_period_samples + 1))
+        normalized_inhibitory = Signal(
+            range(192 * self.activity_period_samples + 1)
+        )
+        total_activity = Signal(range(maximum_population_sum + 1))
         gate_density = Signal(4)
         transfer = Signal()
+        period = self.activity_period_samples
+
+        def threshold_index(value, thresholds):
+            result = Const(0, 3)
+            for index, threshold in enumerate(thresholds, start=1):
+                result = Mux(value >= threshold * period, index, result)
+            return result
+
+        density_value = Const(2, 4)
+        for threshold, density in (
+            (4, 3), (8, 4), (12, 6), (16, 8), (20, 10), (24, 12)
+        ):
+            density_value = Mux(
+                total_activity >= threshold * period, density, density_value
+            )
 
         m.d.comb += [
             transfer.eq(self.i.valid & self.o.ready),
             self.o.valid.eq(self.i.valid),
             self.i.ready.eq(self.o.ready),
-            excitatory.eq(self.excitatory_spike_count),
+            excitatory.eq(self.excitatory_activity_sum),
             normalized_inhibitory.eq(
-                (self.inhibitory_spike_count << 1)
-                + self.inhibitory_spike_count
+                (self.inhibitory_activity_sum << 1)
+                + self.inhibitory_activity_sum
             ),
             total_activity.eq(
-                self.excitatory_spike_count + self.inhibitory_spike_count
+                self.excitatory_activity_sum + self.inhibitory_activity_sum
             ),
-            next_indices[0].eq(Mux(
-                excitatory >= 24,
-                7,
-                Mux(excitatory >= 20, 6,
-                    Mux(excitatory >= 16, 5,
-                        Mux(excitatory >= 12, 4,
-                            Mux(excitatory >= 9, 3,
-                                Mux(excitatory >= 6, 2,
-                                    Mux(excitatory >= 3, 1, 0))))))),
-            ),
-            next_indices[1].eq(Mux(
-                self.inhibitory_spike_count >= 8,
-                7,
-                self.inhibitory_spike_count[:3],
+            next_indices[0].eq(threshold_index(
+                excitatory, (3, 6, 9, 12, 16, 20, 24)
+            )),
+            next_indices[1].eq(threshold_index(
+                self.inhibitory_activity_sum, (2, 3, 4, 5, 6, 7, 8)
             )),
             next_indices[2].eq(Mux(
-                normalized_inhibitory >= excitatory + 16,
+                normalized_inhibitory >= excitatory + 16 * period,
                 0,
-                Mux(normalized_inhibitory >= excitatory + 8, 1,
-                    Mux(normalized_inhibitory >= excitatory + 3, 2,
-                        Mux(excitatory >= normalized_inhibitory + 24, 7,
-                            Mux(excitatory >= normalized_inhibitory + 16, 6,
-                                Mux(excitatory >= normalized_inhibitory + 8, 5,
-                                    Mux(excitatory >= normalized_inhibitory + 3, 4, 3))))))),
-            ),
-            gate_density.eq(Mux(
-                total_activity < 4,
-                2,
-                Mux(total_activity >= 24, 12, total_activity >> 1),
+                Mux(normalized_inhibitory >= excitatory + 8 * period, 1,
+                    Mux(normalized_inhibitory >= excitatory + 3 * period, 2,
+                        Mux(excitatory >= normalized_inhibitory + 24 * period, 7,
+                            Mux(excitatory >= normalized_inhibitory + 16 * period, 6,
+                                Mux(excitatory >= normalized_inhibitory + 8 * period, 5,
+                                    Mux(
+                                        excitatory
+                                        >= normalized_inhibitory + 3 * period,
+                                        4,
+                                        3,
+                                    )))))),
             )),
+            gate_density.eq(density_value),
             self.o.payload[2].as_value().eq(pitch_values[self.note_indices[0]]),
             self.o.payload[3].as_value().eq(Mux(
                 self.gate_remaining != 0,
@@ -176,23 +197,39 @@ class SNN2PerformanceMapper(wiring.Component):
                 m.d.sync += phase.eq(phase + voice_increments[note_index])
 
         advance_clock = Const(1) if self.wall_clock_hz is not None else transfer
-        with m.If(advance_clock):
-            with m.If(self.control_counter == self.control_period_ticks - 1):
-                m.d.sync += [
-                    self.control_counter.eq(0),
-                    self.step.eq(self.step + 1),
-                    self.note_indices[0].eq(next_indices[0]),
-                    self.note_indices[1].eq(next_indices[1]),
-                    self.note_indices[2].eq(next_indices[2]),
-                    self.gate_remaining.eq(Mux(
-                        pattern_values[self.step] < gate_density,
-                        self.gate_high_ticks,
-                        0,
-                    )),
-                ]
-            with m.Else():
+        with m.If(
+            advance_clock
+            & (self.control_counter == self.control_period_ticks - 1)
+        ):
+            m.d.sync += [
+                self.control_counter.eq(0),
+                self.step.eq(self.step + 1),
+                self.note_indices[0].eq(next_indices[0]),
+                self.note_indices[1].eq(next_indices[1]),
+                self.note_indices[2].eq(next_indices[2]),
+                self.excitatory_activity_sum.eq(0),
+                self.inhibitory_activity_sum.eq(0),
+                self.gate_remaining.eq(Mux(
+                    pattern_values[self.step] < gate_density,
+                    self.gate_high_ticks,
+                    0,
+                )),
+            ]
+        with m.Else():
+            with m.If(advance_clock):
                 m.d.sync += self.control_counter.eq(self.control_counter + 1)
                 with m.If(self.gate_remaining != 0):
                     m.d.sync += self.gate_remaining.eq(self.gate_remaining - 1)
+            with m.If(transfer):
+                m.d.sync += [
+                    self.excitatory_activity_sum.eq(
+                        self.excitatory_activity_sum
+                        + self.excitatory_spike_count
+                    ),
+                    self.inhibitory_activity_sum.eq(
+                        self.inhibitory_activity_sum
+                        + self.inhibitory_spike_count
+                    ),
+                ]
 
         return m

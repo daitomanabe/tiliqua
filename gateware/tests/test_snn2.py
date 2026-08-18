@@ -443,15 +443,18 @@ class SNN2PerformanceMapperTests(unittest.TestCase):
         self.assertEqual(set(outputs[3]), {0, dut.FIVE_VOLTS_ASQ})
 
     def test_wall_clock_control_advances_while_stream_is_stalled(self):
-        dut = SNN2PerformanceMapper(wall_clock_hz=800)
+        dut = SNN2PerformanceMapper(sample_rate=800, wall_clock_hz=800)
 
         async def bench(ctx):
             ctx.set(dut.i.valid, 1)
-            ctx.set(dut.o.ready, 0)
+            ctx.set(dut.o.ready, 1)
             ctx.set(dut.excitatory_spike_count, 30)
             ctx.set(dut.inhibitory_spike_count, 10)
+            for _ in range(99):
+                await ctx.tick()
             phases_before = tuple(ctx.get(phase) for phase in dut.phases)
-            for _ in range(101):
+            ctx.set(dut.o.ready, 0)
+            for _ in range(2):
                 await ctx.tick()
             self.assertEqual(ctx.get(dut.step), 1)
             self.assertEqual(ctx.get(dut.note_indices[0]), 7)
