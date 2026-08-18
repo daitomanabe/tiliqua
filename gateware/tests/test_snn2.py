@@ -39,6 +39,36 @@ def rehash(manifest):
     return manifest
 
 
+def fixture_4096(sample):
+    return {
+        "encoder_spikes": ((sample * 73) ^ (sample >> 3)) & 0xFF,
+        "external_drive": 6_000 + (sample % 7) * 1_500,
+        "inhibitory_gain_q8": (128, 256, 384, 512)[sample % 4],
+        "adaptation_gain_q8": (0, 128, 256, 512)[(sample // 4) % 4],
+    }
+
+
+def pack_state_snapshot(states):
+    snapshot = 0
+    for index, state in enumerate(states):
+        word = (
+            (state.v & ((1 << 18) - 1))
+            | (state.ie << 18)
+            | (state.ii << 34)
+            | (state.a << 50)
+            | (state.r << 66)
+        )
+        snapshot |= word << (index * 70)
+    return snapshot
+
+
+def pack_event_snapshot(excitatory, inhibitory):
+    snapshot = 0
+    for index, (event_e, event_i) in enumerate(zip(excitatory, inhibitory)):
+        snapshot |= (event_e | (event_i << 17)) << (index * 34)
+    return snapshot
+
+
 class SNN2ManifestTests(unittest.TestCase):
 
     def test_checked_in_manifest_is_canonical_and_reproducible(self):
@@ -145,12 +175,7 @@ class SNN2ReferenceTests(unittest.TestCase):
         second = SNN2Reference(manifest)
         for sample in range(4096):
             previous_spike_count = first.spike_vector.bit_count()
-            fixture = {
-                "encoder_spikes": ((sample * 73) ^ (sample >> 3)) & 0xFF,
-                "external_drive": 6_000 + (sample % 7) * 1_500,
-                "inhibitory_gain_q8": (128, 256, 384, 512)[sample % 4],
-                "adaptation_gain_q8": (0, 128, 256, 512)[(sample // 4) % 4],
-            }
+            fixture = fixture_4096(sample)
             self.assertEqual(first.step(**fixture), second.step(**fixture))
             self.assertEqual(first.snapshot(), second.snapshot())
             self.assertEqual(first.last_event_count, previous_spike_count * 8)
@@ -403,6 +428,77 @@ class SNN2VisualizerTests(unittest.TestCase):
 
 
 class SNN2RTLTests(unittest.TestCase):
+
+    def test_4096_sample_rtl_matches_all_states_events_outputs_and_counters(self):
+        manifest = make_default_manifest()
+        dut = SparseALIFNetwork(manifest, simulation_probe=True)
+        reference = SNN2Reference(manifest)
+
+        async def bench(ctx):
+            ctx.set(dut.o.ready, 0)
+            for sample in range(4096):
+                fixture = fixture_4096(sample)
+                expected_output = reference.step(**fixture)
+                ctx.set(dut.i.payload.encoder_spikes, fixture["encoder_spikes"])
+                ctx.set(dut.i.payload.external_drive, fixture["external_drive"])
+                ctx.set(
+                    dut.i.payload.inhibitory_gain_q8,
+                    fixture["inhibitory_gain_q8"],
+                )
+                ctx.set(
+                    dut.i.payload.adaptation_gain_q8,
+                    fixture["adaptation_gain_q8"],
+                )
+                ctx.set(dut.i.valid, 1)
+                while not ctx.get(dut.i.ready):
+                    await ctx.tick()
+                await ctx.tick()
+                ctx.set(dut.i.valid, 0)
+                while not ctx.get(dut.o.valid):
+                    await ctx.tick()
+
+                self.assertEqual(
+                    tuple(
+                        ctx.get(dut.o.payload[channel].as_value())
+                        for channel in range(4)
+                    ),
+                    expected_output,
+                    f"output mismatch at sample {sample}",
+                )
+                self.assertEqual(
+                    ctx.get(dut.spike_vector),
+                    reference.spike_vector,
+                    f"spike mismatch at sample {sample}",
+                )
+                self.assertEqual(
+                    ctx.get(dut.simulation_state_snapshot),
+                    pack_state_snapshot(reference.states),
+                    f"state mismatch at sample {sample}",
+                )
+                self.assertEqual(
+                    ctx.get(dut.simulation_event_snapshot),
+                    pack_event_snapshot(
+                        reference.last_excitatory_events,
+                        reference.last_inhibitory_events,
+                    ),
+                    f"event mismatch at sample {sample}",
+                )
+                self.assertEqual(
+                    ctx.get(dut.event_count), reference.last_event_count
+                )
+                self.assertEqual(ctx.get(dut.sample_index), sample + 1)
+                self.assertLessEqual(ctx.get(dut.scheduler_cycles), 640)
+                self.assertLess(ctx.get(dut.deadline_cycles), 1250)
+                self.assertEqual(ctx.get(dut.fault), 0)
+
+                ctx.set(dut.o.ready, 1)
+                await ctx.tick()
+                ctx.set(dut.o.ready, 0)
+
+        sim = Simulator(dut)
+        sim.add_clock(1e-6)
+        sim.add_testbench(bench)
+        sim.run()
 
     def test_rtl_matches_reference_in_all_states_outputs_and_counters(self):
         manifest = make_default_manifest()

@@ -74,8 +74,11 @@ violation, invalid encoder mapping, and stale payload checksum.
 
 ``quick`` covers schema/export, golden arithmetic, frequency ordering,
 backpressure, the DVI color contract, and reference/RTL equivalence. ``stress``
-covers the 4,096-sample integer fixture and all-neurons-spike scheduler case.
-``check`` runs every test and the Verilator AV contract.
+covers the independent 4,096-sample integer fixture, the 4,096-sample
+all-state/event RTL comparison, and the all-neurons-spike scheduler case.
+The full RTL comparison takes about 24 minutes on the reference development
+machine, so ``check`` runs the other tests plus the Verilator AV contract while
+``stress`` remains the explicit extended gate.
 
 .. list-table:: Final simulation evidence
    :header-rows: 1
@@ -83,9 +86,12 @@ covers the 4,096-sample integer fixture and all-neurons-spike scheduler case.
    * - Metric
      - Contract
      - Current result
-   * - Unit tests
+   * - Standard unit tests
      - all pass
      - 15 tests / 23 subtests
+   * - Extended RTL equivalence
+     - 4,096 samples, all states/events
+     - pass (23 min 47 s)
    * - Previous spikes
      - 256
      - 256
@@ -200,14 +206,14 @@ By default it writes below ``build/snn2-import/<sha-prefix>/``: canonical
 one readout-weight HEX file, and ``build_manifest.json`` containing every
 derived-file SHA-256. Repeat export of the same input is byte-identical.
 
-6. Remaining gates and safety boundary
-======================================
+6. Remaining hardware and training gates
+========================================
 
-The 4,096-sample fixture proves deterministic bounded behavior in the
-independent integer model; the current all-state RTL equivalence fixture is
-shorter. Low, medium, and high population-rate and audio ranges are frozen by
+The independent integer model and RTL are compared for 4,096 consecutive
+samples across the spike vector, all 256 neuron states, all per-neuron E/I
+event sums, four outputs, and scheduler counters. Low, medium, and high
+population-rate and audio ranges are frozen by
 ``snn2/snn2_population_contract.json`` and checked in every full test run.
-Full 4,096-sample all-state RTL comparison remains a named regression gate.
 
 No command on this page accesses USB, ``FLASH / DEBUG``, ``DEVICE / HOST``,
 SPI flash, calibration EEPROM, ES-9, or physical outputs. Place-and-route does

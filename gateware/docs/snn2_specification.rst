@@ -58,10 +58,10 @@ The latest self-test R5 build closes sync at 76.18 MHz with 61% physical COMB;
 the live-input build closes sync at 70.93 MHz with 68% physical COMB. Both
 also pass audio, DVI, DVI5x, FF, BRAM, and DSP limits. These are local
 simulation and place-and-route results: neither bitstream has been loaded onto
-the FPGA. Volatile SRAM validation, the trained manifest, and the full
-4,096-sample all-state RTL comparison remain named gates. Low, medium, and high
-population-rate ranges are frozen in ``snn2/snn2_population_contract.json``.
-See :doc:`snn2_v1_reference_rtl` for commands and the exact validation scope.
+the FPGA. Volatile SRAM validation and the trained manifest remain named gates.
+The full 4,096-sample all-state/event RTL comparison and frozen low, medium,
+and high population-rate ranges run locally. See :doc:`snn2_v1_reference_rtl`
+for commands and the exact validation scope.
 
 Goals and non-goals
 ===================

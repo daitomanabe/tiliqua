@@ -59,10 +59,28 @@ class SparseALIFNetwork(wiring.Component):
     reads required by the neuron engine.
     """
 
-    def __init__(self, manifest: dict, *, initial_spikes: int = 0):
+    def __init__(
+        self,
+        manifest: dict,
+        *,
+        initial_spikes: int = 0,
+        simulation_probe: bool = False,
+    ):
         self.manifest = validate_manifest(manifest)
         self.edge_banks = compile_edge_banks(self.manifest)
         self.initial_spikes = initial_spikes & ((1 << 256) - 1)
+        self.simulation_probe = simulation_probe
+        if simulation_probe:
+            self.simulation_state_words = tuple(
+                Signal(70, name=f"simulation_state_{index}")
+                for index in range(256)
+            )
+            self.simulation_event_words = tuple(
+                Signal(34, name=f"simulation_event_{index}")
+                for index in range(256)
+            )
+            self.simulation_state_snapshot = Cat(*self.simulation_state_words)
+            self.simulation_event_snapshot = Cat(*self.simulation_event_words)
         super().__init__({
             "i": In(stream.Signature(SNN2_INPUT_LAYOUT)),
             "o": Out(stream.Signature(data.ArrayLayout(ASQ, 4))),
@@ -169,6 +187,22 @@ class SparseALIFNetwork(wiring.Component):
             event_memories.append(memory)
             event_reads.append(read)
             event_writes.append(write)
+
+        if self.simulation_probe:
+            state_probes_by_lane = [
+                Array(
+                    self.simulation_state_words[batch * 16 + lane]
+                    for batch in range(16)
+                )
+                for lane in range(16)
+            ]
+            event_probes_by_lane = [
+                Array(
+                    self.simulation_event_words[batch * 16 + lane]
+                    for batch in range(16)
+                )
+                for lane in range(16)
+            ]
 
         edge_reads = []
         for bank, words in enumerate(self.edge_banks):
@@ -692,6 +726,10 @@ class SparseALIFNetwork(wiring.Component):
                     ]
                     for target, source in stage1_captures[lane]:
                         m.d.sync += target.eq(source)
+                    if self.simulation_probe:
+                        m.d.sync += event_probes_by_lane[lane][batch_index].eq(
+                            event_reads[lane].data
+                        )
                 m.next = "NEURON_V"
 
             with m.State("NEURON_V"):
@@ -718,6 +756,10 @@ class SparseALIFNetwork(wiring.Component):
                         state_writes[lane].data.eq(lane_next_states[lane]),
                         state_writes[lane].en.eq(1),
                     ]
+                    if self.simulation_probe:
+                        m.d.sync += state_probes_by_lane[lane][batch_index].eq(
+                            lane_next_states[lane]
+                        )
                 m.d.sync += next_spike_vector.word_select(
                     batch_index, 16
                 ).eq(lane_spike_vector)

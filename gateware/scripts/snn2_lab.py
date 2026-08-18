@@ -200,7 +200,15 @@ def build(args: argparse.Namespace) -> None:
 
 def check(args: argparse.Namespace) -> None:
     doctor(args)
-    run([sys.executable, "-m", "pytest", "-q", "tests/test_snn2.py"])
+    run([
+        sys.executable,
+        "-m",
+        "pytest",
+        "-q",
+        "tests/test_snn2.py",
+        "-k",
+        "not 4096_sample_rtl",
+    ])
     integration(args)
     if args.with_build:
         build(args)
@@ -212,6 +220,7 @@ def report(_: argparse.Namespace) -> None:
     print("  reference freeze   implemented")
     print("  neuron engine      implemented: 256 logical / 16 physical lanes")
     print("  sparse scheduler   implemented: 2048 edges / 4 banks / no-drop counter")
+    print("  RTL equivalence    implemented: 4096 samples / all states and events")
     print("  AV path            implemented: 8-band encoder / 4 outputs / DVI")
     print("  R5 synthesis/QoR   implemented: self-test + live profiles")
     print("  SRAM validation    pending")

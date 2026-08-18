@@ -239,6 +239,8 @@ class SNN2Reference:
         self.excitatory_lp = 0
         self.inhibitory_lp = 0
         self.last_event_count = 0
+        self.last_excitatory_events = (0,) * NEURON_COUNT
+        self.last_inhibitory_events = (0,) * NEURON_COUNT
         self.last_outputs = (0, 0, 0, 0)
 
     def _schedule(self, inhibitory_gain_q8: int) -> tuple[list[int], list[int], int]:
@@ -281,6 +283,8 @@ class SNN2Reference:
             raise ValueError("adaptation_gain_q8 must be 0..512")
 
         events_e, events_i, event_count = self._schedule(inhibitory_gain_q8)
+        self.last_excitatory_events = tuple(events_e)
+        self.last_inhibitory_events = tuple(events_i)
         next_states: list[ALIFState] = []
         for index, (state, neuron) in enumerate(
             zip(self.states, self.manifest["neurons"])
