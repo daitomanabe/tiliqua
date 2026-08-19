@@ -46,7 +46,18 @@ reference over several control blocks for the default chord, a worst-case
 all-harmonics zero-spread state under output backpressure, a muted state, and
 a transposed/tilted GLASS state driven by changing CV, with every sample
 finishing in exactly 1,027 sync cycles (limit 1,250) and no overrun fault.
-No build or hardware result exists yet for this profile.
+
+Phase 4 (four additive outputs and safety) is implemented on the same RTL:
+``OUT 0/1`` master stereo, ``OUT 2`` low/sub stem, and ``OUT 3`` air stem
+are produced by the four bus gains of the parameter bank, and
+``test_rtl_outputs_are_bounded_mute_exactly_and_keep_low_band_mono`` asserts
+directly on RTL outputs that the worst-case all-harmonics zero-spread state
+stays inside ``+/-8000 ASQ`` with every bus active, that ``stereo_width = 0``
+gives bit-identical ``OUT 0`` and ``OUT 1``, that the air stem is bipolar,
+and that a zero master with the same worst-case gains yields exact all-zero
+output on all four channels. Long-window DC behaviour and the sub-stem
+spectrum are reference gates that the sample-exact RTL inherits. No build or
+hardware result exists yet for this profile.
 
 Goals
 =====
@@ -464,8 +475,7 @@ Reference model and regression gates
 11. master smoothing is monotonic without overshoot;
 12. two instances produce identical output for the same CV stream.
 
-Later phases add, as separate gated commits: the four outputs and safety
-tests in RTL; the CV layer; the HDMI state view with pixel-level tests; the Mac transport and
+Later phases add, as separate gated commits: the CV layer; the HDMI state view with pixel-level tests; the Mac transport and
 ES-9 return bridge; full simulation and R5 QoR; SRAM-only hardware
 validation; and demo packaging.
 

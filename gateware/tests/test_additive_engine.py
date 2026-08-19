@@ -127,6 +127,60 @@ class OscillatorBankTests(unittest.TestCase):
         self.assertEqual(len(mismatches), 0)
         self.assertLessEqual(max(cycles), T.SYNC_CYCLES_PER_SAMPLE - 200)
 
+    def test_rtl_outputs_are_bounded_mute_exactly_and_keep_low_band_mono(self):
+        """Output-contract properties asserted directly on the RTL outputs."""
+        worst = replace(
+            DEFAULT_CONTROL_STATE,
+            master=T.Q15_ONE,
+            harmonic_levels=(T.Q15_ONE,) * 10,
+            detune_millicents=0,
+            phase_spread=0,
+            evolution_amount=0,
+            stereo_width=0,
+            sub_focus=T.Q15_ONE,
+        )
+        dut = AdditiveOscillatorBank()
+        reference = AdditiveReference(worst)
+        outputs = []
+        muted_outputs = []
+
+        async def bench(ctx):
+            ctx.set(dut.o.ready, 0)
+            reference.prepare_block()
+            await write_block_parameters(ctx, dut, reference)
+            for _ in range(T.CONTROL_BLOCK_SAMPLES):
+                actual, cycles = await run_sample(ctx, dut)
+                outputs.append(actual)
+                self.assertLessEqual(cycles, T.SYNC_CYCLES_PER_SAMPLE)
+            # Same worst-case gains, master forced to zero: exact silence.
+            ctx.set(dut.master_asq, 0)
+            ctx.set(dut.commit, 1)
+            await ctx.tick()
+            ctx.set(dut.commit, 0)
+            for _ in range(40):
+                actual, _ = await run_sample(ctx, dut)
+                muted_outputs.append(actual)
+            self.assertEqual(ctx.get(dut.fault), 0)
+
+        sim = Simulator(dut)
+        sim.add_clock(1e-6)
+        sim.add_testbench(bench)
+        sim.run()
+
+        peak = max(abs(v) for frame in outputs for v in frame)
+        self.assertLessEqual(peak, T.OUTPUT_CEILING_ASQ)
+        self.assertGreater(peak, 1_000)
+        for frame in outputs:
+            self.assertEqual(frame[0], frame[1])  # stereo_width = 0 -> exact mono
+        for channel in range(4):
+            self.assertTrue(any(frame[channel] != 0 for frame in outputs))
+        # The air stem (>= 600 Hz) is bipolar within one block; long-window DC
+        # behaviour of the low buses is the reference's gate
+        # (test_reference_is_deterministic_and_dc_free) and the RTL is exact.
+        self.assertLess(min(frame[3] for frame in outputs), 0)
+        self.assertGreater(max(frame[3] for frame in outputs), 0)
+        self.assertTrue(all(frame == (0, 0, 0, 0) for frame in muted_outputs))
+
 
 if __name__ == "__main__":
     unittest.main()
