@@ -137,7 +137,6 @@ TILT_STEP_Q10 = tuple(
 
 DRIFT_CENTS = 2.2
 DRIFT_RATIO_Q16 = round((2 ** (DRIFT_CENTS / 1200) - 1) * (1 << 16))
-DRIFT_SHIFT = 15 + 16
 DETUNE_SPACING_Q40 = round(
     math.log(2) / 1200 / 1000 / (VOICE_COUNT - 1) * (1 << 40)
 )

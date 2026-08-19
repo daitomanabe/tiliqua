@@ -145,7 +145,7 @@ class AdditiveReferenceTests(unittest.TestCase):
 
     def test_default_frequencies_cover_five_tones_ten_harmonics_twenty_voices(self):
         reference = AdditiveReference()
-        reference.render(1)
+        reference.render(T.CONTROL_BLOCK_SAMPLES + 1)  # block 1 carries the chord
         frequencies = reference.oscillator_frequencies_hz().reshape(
             T.GROUP_COUNT, T.VOICE_COUNT
         )
@@ -318,17 +318,35 @@ class AdditiveReferenceTests(unittest.TestCase):
         self.assertEqual(reference.statistics.cv_smoothed, (0, 0, 0, 0))
         self.assertEqual(reference.statistics.pitch_ratio_q16, 1 << 16)
 
-    def test_frames_commit_only_at_block_boundaries(self):
+    def test_frames_latch_at_a_block_start_and_apply_one_block_later(self):
         reference = AdditiveReference()
         reference.render(T.CONTROL_BLOCK_SAMPLES + 5)
         changed = replace(DEFAULT_CONTROL_STATE, harmony=0)
         reference.commit_frame(changed)
+        # Rest of block 1: nothing changes.
         reference.render(T.CONTROL_BLOCK_SAMPLES - 6)
         self.assertEqual(reference.state, DEFAULT_CONTROL_STATE)
         reference.render(1)
         self.assertEqual(reference.state, DEFAULT_CONTROL_STATE)
+        # Block 2 start: the frame is latched but block 2 still plays the
+        # parameters computed from the old state.
+        reference.render(1)
+        self.assertEqual(reference.state, DEFAULT_CONTROL_STATE)
+        self.assertEqual(reference._latched_state, changed)
+        reference.render(T.CONTROL_BLOCK_SAMPLES - 1)
+        self.assertEqual(reference.state, DEFAULT_CONTROL_STATE)
+        # Block 3 start: the new state drives the parameters.
         reference.render(1)
         self.assertEqual(reference.state, changed)
+
+    def test_block_zero_is_silent_and_block_one_plays(self):
+        reference = AdditiveReference()
+        first = reference.render(T.CONTROL_BLOCK_SAMPLES)
+        self.assertTrue(np.all(first == 0))
+        self.assertEqual(reference.master_asq, 0)
+        second = reference.render(T.CONTROL_BLOCK_SAMPLES)
+        self.assertGreater(int(np.abs(second).max()), 0)
+        self.assertGreater(reference.master_asq, 0)
 
     def test_harmony_morph_is_slow_monotonic_and_phase_continuous(self):
         reference = AdditiveReference()

@@ -146,7 +146,8 @@ class OscillatorBankTests(unittest.TestCase):
 
         async def bench(ctx):
             ctx.set(dut.o.ready, 0)
-            reference.prepare_block()
+            reference.render(T.CONTROL_BLOCK_SAMPLES)  # block 0 is silent
+            self.assertTrue(reference.prepare_block())  # block 1 parameters
             await write_block_parameters(ctx, dut, reference)
             for _ in range(T.CONTROL_BLOCK_SAMPLES):
                 actual, cycles = await run_sample(ctx, dut)

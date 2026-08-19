@@ -165,6 +165,8 @@ class AdditiveReference:
 
     def __init__(self, state: AdditiveControlState | None = None):
         self.state = (state or DEFAULT_CONTROL_STATE).validate()
+        self._latched_state = self.state
+        self._cv_delayed = [0, 0, 0, 0]
         self.pending_state: AdditiveControlState | None = None
         self.sample_index = 0
         self.block_index = 0
@@ -205,7 +207,11 @@ class AdditiveReference:
     # Host control
 
     def commit_frame(self, state: AdditiveControlState) -> None:
-        """Queue a validated frame; it becomes current at the next block start."""
+        """Queue a validated frame.
+
+        It is latched at the next block start and its parameters take effect
+        one block later, exactly like the RTL control engine.
+        """
         self.pending_state = state.validate()
 
     # ------------------------------------------------------------------
@@ -227,17 +233,34 @@ class AdditiveReference:
         }
 
     def step_block(self) -> None:
-        """Run one control block: smoothing, per-group targets, normalization."""
-        if self.pending_state is not None:
-            self.state = self.pending_state
-            self.pending_state = None
-        state = self.state
+        """Commit the parameters for the block that starts now.
 
-        # CV: block average of the previous block, then a 1/8 one-pole.
+        Schedule (mirrors the RTL, whose control engine needs most of a block
+        to finish): the parameters taking effect at block ``b`` are computed
+        from the frame latched at the start of block ``b - 1`` and the CV
+        average accumulated during block ``b - 2``. Block 0 is silent because
+        nothing has been computed yet.
+        """
+        cv_average = [acc >> 7 for acc in self.cv_accumulators]
+        self.cv_accumulators = [0, 0, 0, 0]
+        state = self._latched_state
+        cv_now = self._cv_delayed
+        if self.pending_state is not None:
+            self._latched_state = self.pending_state
+            self.pending_state = None
+        self._cv_delayed = cv_average
+        self.state = state
+
+        if self.block_index == 0:
+            self.master_asq = 0
+            self._commit([AdditiveGroupParameters() for _ in range(T.GROUP_COUNT)])
+            self.statistics = AdditiveBlockStatistics(block_index=0)
+            self.block_index = 1
+            return
+
+        # CV: normalize the delayed block average, then a 1/8 one-pole.
         for index in range(4):
-            average = self.cv_accumulators[index] >> 7
-            self.cv_accumulators[index] = 0
-            normalized = normalize_cv(average, unipolar=(index == 0))
+            normalized = normalize_cv(cv_now[index], unipolar=(index == 0))
             if not self.initialized:
                 self.cv_smoothed[index] = normalized
             else:
@@ -316,15 +339,18 @@ class AdditiveReference:
             lows[group] = base <= T.LOW_STEM_INCREMENT
             airs[group] = base >= T.AIR_STEM_INCREMENT
 
+            # Two-stage products keep every intermediate inside 48 bits so the
+            # RTL serial multiplier can reproduce them exactly.
             drift = (
                 sine_q15(self.pitch_lfo_phase + T.group_offset_phase(group)) * evolution
             ) >> 15
-            midpoint = base + ((base * drift * T.DRIFT_RATIO_Q16) >> T.DRIFT_SHIFT)
+            drift_term = (base * drift) >> 15
+            midpoint = base + ((drift_term * T.DRIFT_RATIO_Q16) >> 16)
             midpoint = (midpoint * pitch_ratio) >> 16
             midpoints[group] = midpoint & T.PHASE_MASK
             spacings[group] = (
-                midpoint * detune * T.DETUNE_SPACING_Q40
-            ) >> T.DETUNE_SPACING_SHIFT
+                ((midpoint * detune) >> 15) * T.DETUNE_SPACING_Q40
+            ) >> (T.DETUNE_SPACING_SHIFT - 15)
             spreads[group] = (
                 ((phase_spread * T.PHASE_VARIATION_Q15[group]) >> 15) * T.SPREAD_UNIT
             ) >> 15

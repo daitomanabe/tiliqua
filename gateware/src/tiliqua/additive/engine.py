@@ -35,6 +35,8 @@ PARAM_LAYOUT = data.StructLayout({
 GROUP_ADDR_BITS = 6
 PARAM_BANK_DEPTH = 2 << GROUP_ADDR_BITS
 MASTER_BITS = 14
+BLOCK_BITS = (T.CONTROL_BLOCK_SAMPLES - 1).bit_length()  # 7: 128 samples per block
+assert 1 << BLOCK_BITS == T.CONTROL_BLOCK_SAMPLES
 VOICE_EDGE = T.VOICE_COUNT - 1  # 19: first voice sits at -19 half-steps
 
 
@@ -68,6 +70,7 @@ class AdditiveOscillatorBank(wiring.Component):
     commit: In(1)
     committed: Out(1)
     sample_start: Out(1)
+    block_start: Out(1)
     cv: Out(data.ArrayLayout(ASQ, 4))
     sample_cycles: Out(unsigned(12))
     sample_index: Out(unsigned(32))
@@ -125,10 +128,15 @@ class AdditiveOscillatorBank(wiring.Component):
         master = Signal(MASTER_BITS)
         cv_latch = Signal(data.ArrayLayout(ASQ, 4))
         cycle_counter = Signal(12)
+        block_boundary = Signal()
         m.d.comb += [
-            self.cv.eq(cv_latch),
+            # During the sample_start cycle the new CV is on the input; the
+            # latch holds it for the rest of the sample.
+            self.cv.eq(Mux(self.sample_start, self.i.payload, cv_latch)),
             self.committed.eq(0),
             self.sample_start.eq(0),
+            block_boundary.eq(self.sample_index[:BLOCK_BITS] == 0),
+            self.block_start.eq(self.sample_start & block_boundary),
         ]
         with m.If(self.commit):
             m.d.sync += commit_pending.eq(1)
@@ -309,7 +317,6 @@ class AdditiveOscillatorBank(wiring.Component):
                 with m.If(self.i.valid):
                     m.d.sync += [
                         cv_latch.eq(self.i.payload),
-                        master.eq(self.master_asq),
                         cycle_counter.eq(0),
                         group.eq(0),
                         voice.eq(0),
@@ -319,9 +326,12 @@ class AdditiveOscillatorBank(wiring.Component):
                     for bus in self.bus:
                         m.d.sync += bus.eq(0)
                     m.d.comb += self.sample_start.eq(1)
-                    with m.If(commit_pending):
+                    # A pending commit (bank + master) lands only on a
+                    # control-block boundary so every block is consistent.
+                    with m.If(commit_pending & block_boundary):
                         m.d.sync += [
                             active.eq(~active),
+                            master.eq(self.master_asq),
                             commit_pending.eq(0),
                         ]
                         m.d.comb += self.committed.eq(1)

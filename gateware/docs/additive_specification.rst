@@ -56,7 +56,25 @@ stays inside ``+/-8000 ASQ`` with every bus active, that ``stereo_width = 0``
 gives bit-identical ``OUT 0`` and ``OUT 1``, that the air stem is bipolar,
 and that a zero master with the same worst-case gains yields exact all-zero
 output on all four channels. Long-window DC behaviour and the sub-stem
-spectrum are reference gates that the sample-exact RTL inherits. No build or
+spectrum are reference gates that the sample-exact RTL inherits.
+
+Phase 5 (CV modulation layer / control engine) is implemented:
+``src/tiliqua/additive/control_engine.py`` (``AdditiveControlEngine``) is
+the RTL counterpart of ``AdditiveReference.step_block``. It latches the host
+frame and the previous block's CV sums at each block start and runs a
+microprogram over bit-serial multiply/divide/square-root units
+(``src/tiliqua/additive/arith.py``): CV normalization and smoothing,
+parameter/master smoothing and the mute ramp, evolution LFOs, fifty
+per-group targets (morph, drift, pitch ratio, detune spacing, phase spread,
+weight motion, tilt, pan), RMS normalization, and a second pass writing the
+four bus gains into the oscillator bank. One block takes about 30,000 sync
+cycles of the 160,000 available. ``src/tiliqua/additive/core.py``
+(``AdditiveCore``) joins it with the oscillator bank.
+``tests/test_additive_control_engine.py`` proves every committed parameter
+and the master equal to the reference across default, GLASS, muted, and
+worst-case frames under sweeping CV, and ``tests/test_additive_core.py``
+proves the complete core sample-exact against ``AdditiveReference`` over five
+control blocks with CV sweeps and a mid-block frame change. No build or
 hardware result exists yet for this profile.
 
 Goals
@@ -386,13 +404,25 @@ Numeric rules
      - membership by increment thresholds 120 Hz and 600 Hz on the
        morph-smoothed base increment
 
+Control block schedule
+----------------------
+
+The control engine needs most of a block, so the schedule is pipelined and
+the reference models it exactly: the parameters that take effect at block
+``b`` are computed during block ``b - 1`` from the host frame latched at the
+start of block ``b - 1`` and the CV averages accumulated during block
+``b - 2``. Block 0 is silent (the bank is empty), block 1 plays the first
+computed parameters. Control latency is therefore two blocks (5.3 ms) plus
+smoothing. The oscillator bank swaps parameter buffers and latches the
+master only at a block boundary.
+
 Control block algorithm
 -----------------------
 
 Once per 128 samples, in this order:
 
-1. Apply a pending frame, if any.
-2. Average the four CV accumulators, normalize, one-pole smooth (``>> 3``).
+1. Latch the current host frame and the CV sums of the block just finished.
+2. Average the four CV sums, normalize, one-pole smooth (``>> 3``).
 3. Smooth ``detune``, ``phase_spread``, ``evolution_amount``,
    ``stereo_width``, ``sub_focus`` (0.45 s) and ``master`` (0.40 s, or the
    linear mute ramp when the output is disabled).
@@ -403,10 +433,14 @@ Once per 128 samples, in this order:
    ``evolution_rate_mhz`` x the per-block increment table.
 6. For each of the 50 groups: morph-smooth the base increment toward
    ``NOTE[note] * harmonic``; classify low/air; add the pitch drift
-   (``2.2 cents x evolution x sin(pitch LFO + group offset)``); multiply by
-   the pitch ratio; derive the detune half-spacing and the phase-spread
-   half-offset; compute the weight-motion target and smooth the weight;
-   apply the harmonic tilt; compute the pan (0 for low groups).
+   (``2.2 cents x evolution x sin(pitch LFO + group offset)``, as
+   ``base + ((((base * drift) >> 15) * 83) >> 16)``); multiply by the pitch
+   ratio (``>> 16``); derive the detune half-spacing
+   (``(((midpoint * detune_mc) >> 15) * 33426) >> 25``) and the phase-spread
+   half-offset (``(((spread * variation) >> 15) * 113025455) >> 15``);
+   compute the weight-motion target and smooth the weight; apply the
+   harmonic tilt; compute the pan (0 for low groups). Every product stays
+   inside 48 bits so the bit-serial multiplier reproduces it exactly.
 7. Sum the squared left, right, low, and air weights; ``isqrt`` each with a
    floor of 256; ``norm = GAIN_UNIT << 16 / root``. The stereo pair shares
    the louder side's root.
@@ -469,13 +503,14 @@ Reference model and regression gates
    changes the 10th/1st harmonic ratio by x4 / x0.25, ``IN 3`` widens the
    phase spread, evolution, and stereo width; the stored UI state is never
    modified;
-9. frames commit only at block boundaries;
+9. frames latch at a block start and apply one block later; block 0 is
+   silent and block 1 plays;
 10. harmony morph is monotonic, reaches 94 % within ``morph_seconds``, and
     phases follow ``phase + increment`` exactly;
 11. master smoothing is monotonic without overshoot;
 12. two instances produce identical output for the same CV stream.
 
-Later phases add, as separate gated commits: the CV layer; the HDMI state view with pixel-level tests; the Mac transport and
+Later phases add, as separate gated commits: the HDMI state view with pixel-level tests; the Mac transport and
 ES-9 return bridge; full simulation and R5 QoR; SRAM-only hardware
 validation; and demo packaging.
 
