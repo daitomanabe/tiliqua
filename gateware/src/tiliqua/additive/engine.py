@@ -76,6 +76,11 @@ class AdditiveOscillatorBank(wiring.Component):
     sample_index: Out(unsigned(32))
     fault: Out(1)
     busy: Out(1)
+    # Display write port: per-oscillator phase relative to voice 0 of its
+    # group (top 8 bits), refreshed every sample for the HDMI particle field.
+    display_addr: Out(unsigned(10))
+    display_data: Out(unsigned(8))
+    display_en: Out(1)
 
     def __init__(self):
         # Simulation probes.
@@ -208,6 +213,8 @@ class AdditiveOscillatorBank(wiring.Component):
 
         phase_new = Signal(unsigned(T.PHASE_BITS))
         effective = Signal(unsigned(T.PHASE_BITS))
+        group_first_phase = Signal(unsigned(T.PHASE_BITS))
+        relative_phase = Signal(unsigned(T.PHASE_BITS))
         m.d.comb += [
             phase_new.eq((phase_read.data + inc_b)[:T.PHASE_BITS]),
             effective.eq((phase_new + spr_b)[:T.PHASE_BITS]),
@@ -217,7 +224,15 @@ class AdditiveOscillatorBank(wiring.Component):
             sine_read.addr.eq(effective[T.SINE_SHIFT:]),
             sine_read.en.eq(1),
             self.group_total_probe.eq(group_total),
+            relative_phase.eq(
+                (effective - Mux(voice_b == 0, effective, group_first_phase))[:T.PHASE_BITS]
+            ),
+            self.display_addr.eq(osc_b),
+            self.display_data.eq(relative_phase[T.PHASE_BITS - 8:]),
+            self.display_en.eq(valid_b),
         ]
+        with m.If(valid_b & (voice_b == 0)):
+            m.d.sync += group_first_phase.eq(effective)
 
         # Pipeline advance (every cycle).
         m.d.sync += [

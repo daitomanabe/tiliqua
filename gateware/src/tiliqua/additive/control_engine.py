@@ -42,6 +42,14 @@ STAGING_LAYOUT = data.StructLayout({
     "spread_half": unsigned(T.PHASE_BITS),
 })
 
+GROUP_DISPLAY_LAYOUT = data.StructLayout({
+    "amplitude": unsigned(16),
+    "low": unsigned(1),
+    "air": unsigned(1),
+    "pan": signed(8),
+    "reserved": unsigned(6),
+})
+
 EFFECTIVE_LAYOUT = data.StructLayout({
     "master": unsigned(15),
     "sub_focus": unsigned(15),
@@ -81,6 +89,10 @@ class AdditiveControlEngine(wiring.Component):
     overrun: Out(1)
     blocks_done: Out(unsigned(16))
     block_cycles: Out(unsigned(18))
+    # Display write port: per-group amplitude, stem flags, and pan.
+    group_display_addr: Out(unsigned(GROUP_ADDR_BITS))
+    group_display_data: Out(GROUP_DISPLAY_LAYOUT)
+    group_display_en: Out(1)
 
     def __init__(self):
         self.amplitude_probe = Signal(16)
@@ -515,6 +527,14 @@ class AdditiveControlEngine(wiring.Component):
         multiply(amplitude, amplitude, lambda p: [
             power_low.eq(Mux(low, power_low + p, power_low)),
             power_air.eq(Mux(air, power_air + p, power_air)),
+        ])
+        comb_then([
+            self.group_display_addr.eq(g),
+            self.group_display_data.amplitude.eq(amplitude),
+            self.group_display_data.low.eq(low),
+            self.group_display_data.air.eq(air),
+            self.group_display_data.pan.eq(pan >> 8),
+            self.group_display_en.eq(1),
         ])
         comb_then([
             staging_wr.addr.eq(g),

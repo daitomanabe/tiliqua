@@ -11,7 +11,7 @@ from amaranth.lib.wiring import In, Out
 from tiliqua.dsp import ASQ
 
 from .control import PAYLOAD_LAYOUT
-from .control_engine import EFFECTIVE_LAYOUT, AdditiveControlEngine
+from .control_engine import EFFECTIVE_LAYOUT, GROUP_DISPLAY_LAYOUT, AdditiveControlEngine
 from .engine import AdditiveOscillatorBank, MASTER_BITS
 
 
@@ -35,6 +35,12 @@ class AdditiveCore(wiring.Component):
     block_cycles: Out(unsigned(18))
     blocks_done: Out(unsigned(16))
     fault: Out(1)
+    display_addr: Out(unsigned(10))
+    display_data: Out(unsigned(8))
+    display_en: Out(1)
+    group_display_addr: Out(unsigned(6))
+    group_display_data: Out(GROUP_DISPLAY_LAYOUT)
+    group_display_en: Out(1)
 
     def __init__(self):
         self.bank = AdditiveOscillatorBank()
@@ -64,6 +70,12 @@ class AdditiveCore(wiring.Component):
             self.block_cycles.eq(control.block_cycles),
             self.blocks_done.eq(control.blocks_done),
             self.fault.eq(bank.fault | control.overrun),
+            self.display_addr.eq(bank.display_addr),
+            self.display_data.eq(bank.display_data),
+            self.display_en.eq(bank.display_en),
+            self.group_display_addr.eq(control.group_display_addr),
+            self.group_display_data.eq(control.group_display_data),
+            self.group_display_en.eq(control.group_display_en),
         ]
         for channel in range(4):
             m.d.comb += self.cv_smoothed[channel].eq(control.cv_smoothed[channel])

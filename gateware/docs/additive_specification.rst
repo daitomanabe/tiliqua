@@ -74,8 +74,23 @@ cycles of the 160,000 available. ``src/tiliqua/additive/core.py``
 and the master equal to the reference across default, GLASS, muted, and
 worst-case frames under sweeping CV, and ``tests/test_additive_core.py``
 proves the complete core sample-exact against ``AdditiveReference`` over five
-control blocks with CV sweeps and a mid-block frame change. No build or
-hardware result exists yet for this profile.
+control blocks with CV sweeps and a mid-block frame change.
+
+Phase 6 (HDMI synthesis-state view) is implemented:
+``src/tiliqua/video/additive_visualizer.py`` paints the 720x720 view below
+from committed engine state only. The oscillator bank writes every
+oscillator's phase relative to voice 0 of its group into a display RAM once
+per sample, and the control engine writes each group's amplitude, stem
+flags, and pan; both are dual-clock block RAMs read in the DVI domain.
+``tests/test_additive_visualizer.py`` asserts pixel-level semantics: the
+field addresses exactly the 1,000 oscillators, a voice row lights at the
+position of its relative phase and with brightness from the group
+amplitude, low/air/body groups and the pan marker are distinct, harmonic
+bars, ownership meters (dim UI base under bright effective), bipolar
+pitch/tilt meters, CV meters, master bar, and link/fault/overrun/activity
+indicators render their values. Whole-frame integration is part of the
+Verilator AV regression of the top level. No build or hardware result exists
+yet for this profile.
 
 Goals
 =====
@@ -466,6 +481,39 @@ For every oscillator ``o = 20 g + k``:
 
 The phase-spread offset is applied at read time, so changing spread or
 detune never discontinues a phase. Phases keep advancing while muted.
+
+HDMI view
+=========
+
+The 720x720 view is driven only by committed synthesis state:
+
+.. list-table:: Screen regions
+   :header-rows: 1
+
+   * - Region
+     - Content
+   * - y 24..104
+     - ten harmonic-level bars of the latched UI frame
+   * - y 112..152
+     - eight ownership meters: master, sub focus, phase spread, evolution,
+       stereo width, detune -- dim bar = UI base, bright band = effective
+       value after CV -- then bipolar pitch and tilt (CV-only)
+   * - y 160..480
+     - 5 x 10 cells of 128 x 32 px; rows 6..25 of each cell are the twenty
+       voices, a 4-px particle sits at ``4 + relative_phase * 120 / 256``
+       where ``relative_phase`` is the oscillator's phase minus voice 0's
+       (so detune beating and phase spread rotate the streak), brightness is
+       the committed group amplitude, colour marks low / air / body groups,
+       and row 2 carries a 2-px pan marker at ``64 + pan / 2``
+   * - y 488..528
+     - four smoothed CV meters (IN 0 unipolar, IN 1-3 bipolar)
+   * - y 536..560 / 568..580
+     - master level bar / control-engine utilization bar
+   * - y 592..624
+     - link alive (green), fault (red), overrun (orange), frame activity
+
+All values cross into the DVI domain through synchronisers and are latched
+at vsync, so slow ambient changes are legible without tearing or flicker.
 
 Safety and mute
 ===============
