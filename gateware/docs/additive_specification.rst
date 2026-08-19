@@ -89,8 +89,29 @@ amplitude, low/air/body groups and the pan marker are distinct, harmonic
 bars, ownership meters (dim UI base under bright effective), bipolar
 pitch/tilt meters, CV meters, master bar, and link/fault/overrun/activity
 indicators render their values. Whole-frame integration is part of the
-Verilator AV regression of the top level. No build or hardware result exists
-yet for this profile.
+Verilator AV regression of the top level.
+
+Phase 8 (full simulation and R5 QoR) is implemented:
+``src/top/additive_av/top.py`` (``ADDITIVE-AV``) joins the core, the UART
+decoder (silent ``tx``), calibrated I/O, the display memories, the visualizer,
+and DVI; ``src/top/additive_av/sim.cpp`` is the Verilator AV regression and
+``scripts/additive_lab.py`` (``pdm additive_lab doctor|quick|unit|integration
+|av-report|build|check``) drives the gates with ``additive/additive_av_contract.json``
+and ``additive/additive_synthesis_contract.json``. The 120 ms AV run
+passes: 5,859 samples, no fault, 1,028 sync cycles per sample (of 1,250),
+31,121 cycles per control block (of 160,000), one control frame accepted
+over the byte port with the link alive, four DC CVs smoothed into the
+expected ranges, seven DVI frames with full RGB span, and all four outputs
+active inside the ``+/-2 V`` ceiling. The first R5 build (seed 2) failed its
+contract at 54.26 MHz sync with 16 DSP tiles; pipelining the phase-update /
+spread / display path into separate stages, latching the serial multiplier
+operands before the magnitude logic, and replacing every constant multiply
+(x19, x5, x3, x29, x120) by shift-add closed the design: sync 66.97 MHz,
+DVI 51.17 MHz, DVI5x 426.80 MHz, audio 64.25 MHz, 9,076 LUT4, 7,361 FF,
+27/42 ``DP16KD``, 6/14 ``MULT18X18D``, 58 % physical COMB, 30 % FF.
+
+The remaining phases are the Mac transport / ES-9 return bridge in the
+management repository, SRAM-only hardware validation, and demo packaging.
 
 Goals
 =====
@@ -558,19 +579,20 @@ Reference model and regression gates
 11. master smoothing is monotonic without overshoot;
 12. two instances produce identical output for the same CV stream.
 
-Later phases add, as separate gated commits: the HDMI state view with pixel-level tests; the Mac transport and
-ES-9 return bridge; full simulation and R5 QoR; SRAM-only hardware
-validation; and demo packaging.
+Later phases add, as separate gated commits: the Mac transport and ES-9
+return bridge; SRAM-only hardware validation; and demo packaging.
 
-Provisional R5 contracts
-========================
+R5 contracts
+============
 
 The profile shall meet sync 60 MHz, audio 12.288 MHz, DVI 39.07 MHz, and
-DVI5x 195.35 MHz for ``720x720p60r2``, and provisionally at most 75 %
-physical COMB, 55 % FF, 42 ``DP16KD``, and 14 ``MULT18X18D``. Every audio
-sample must complete its 1,000 oscillator updates, bus flush, limiting, and
-output handoff within 1,250 sync cycles, asserted in simulation. A generated
-``top.bit`` without a final timing PASS is a failure.
+DVI5x 195.35 MHz for ``720x720p60r2``, and at most 75 % physical COMB, 55 %
+FF, 42 ``DP16KD``, and 14 ``MULT18X18D`` (``additive/additive_synthesis_contract.json``).
+Every audio sample must complete its 1,000 oscillator updates, bus flush,
+limiting, and output handoff within 1,250 sync cycles, and every control
+block within 160,000, both asserted by the Verilator contract. A generated
+``top.bit`` without a final timing PASS is a failure; ``pdm additive_lab
+build`` enforces this.
 
 Hardware safety boundary
 ========================

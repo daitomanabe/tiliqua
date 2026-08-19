@@ -446,7 +446,7 @@ class AdditiveControlEngine(wiring.Component):
         label("pass1")
         do(note.eq(
             st.root_midi
-            + interval_table[st.harmony[:3] * T.TONE_COUNT + tone]
+            + interval_table[(st.harmony[:3] << 2) + st.harmony[:3] + tone]
             - Mux((tone == 0) & st.flags.sub_octave, 12, 0)
         ))
         do()  # base/weight read ports follow ``g``; one cycle of read latency

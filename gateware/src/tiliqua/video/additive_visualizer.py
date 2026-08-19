@@ -122,7 +122,8 @@ class AdditiveVisualizer(Elaboratable):
             self.group_addr.eq(group),
             # address = group * 20 + voice
             self.particle_addr.eq((group << 4) + (group << 2) + voice),
-            particle_x.eq(4 + ((self.particle_data * PARTICLE_SPAN) >> 8)),
+            # data * 120 = data * 128 - data * 8, adders only.
+            particle_x.eq(4 + (((self.particle_data << 7) - (self.particle_data << 3)) >> 8)),
             particle_hit.eq(
                 voice_row & (tone_x >= particle_x) & (tone_x < particle_x + PARTICLE_WIDTH)
             ),
@@ -169,7 +170,7 @@ class AdditiveVisualizer(Elaboratable):
             level_y.eq(y - LEVELS_Y),
             level_value.eq(self.levels.word_select(bar_index, 8)),
             # 80 rows, fill from the bottom: row r filled when (79 - r) * 3.2 < value
-            level_filled.eq(((LEVELS_H - 1 - level_y) << 4) < (level_value * 5)),
+            level_filled.eq(((LEVELS_H - 1 - level_y) << 4) < ((level_value << 2) + level_value)),
             inside_meters.eq(
                 (x >= BAR_X) & (x < BAR_X + self.OWNERSHIP_METERS * BAR_W)
                 & (y >= METERS_Y) & (y < METERS_Y + METERS_H)

@@ -164,7 +164,8 @@ class AdditiveAVTop(Elaboratable):
             return value[7:15]
 
         def byte_of_detune(value):
-            return (value * 29)[11:19]
+            # value * 29 / 2048, adders only: 29 = 16 + 8 + 4 + 1
+            return ((value << 4) + (value << 3) + (value << 2) + value)[11:19]
 
         frame = decoder.frame
         effective = core.effective
@@ -184,7 +185,9 @@ class AdditiveAVTop(Elaboratable):
         pitch_scaled = Signal(signed(10))
         pitch_byte = Signal(signed(8))
         m.d.comb += [
-            pitch_scaled.eq((effective.pitch_octaves_q10 * 3) >> 2),
+            pitch_scaled.eq(
+                ((effective.pitch_octaves_q10 << 1) + effective.pitch_octaves_q10) >> 2
+            ),
             pitch_byte.eq(Mux(
                 pitch_scaled > 127, 127, Mux(pitch_scaled < -127, -127, pitch_scaled)
             )),

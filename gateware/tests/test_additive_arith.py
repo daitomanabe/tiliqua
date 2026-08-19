@@ -45,7 +45,7 @@ class SerialArithmeticTests(unittest.TestCase):
         sim.run()
         for (a, b), (product, cycles) in zip(cases, results):
             self.assertEqual(product, a * b, (a, b))
-            self.assertLessEqual(cycles, 43)
+            self.assertLessEqual(cycles, 44)
 
     def test_divider_and_sqrt_are_exact(self):
         divider = SerialDivider(width=32)

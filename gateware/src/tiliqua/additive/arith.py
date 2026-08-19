@@ -16,7 +16,7 @@ from amaranth.lib.wiring import In, Out
 
 
 class SerialMultiplier(wiring.Component):
-    """Signed ``width`` x ``width`` -> signed ``2 * width`` in <= ``width + 2`` cycles.
+    """Signed ``width`` x ``width`` -> signed ``2 * width`` in <= ``width + 3`` cycles.
 
     Operates on magnitudes with an early exit when the remaining multiplier
     bits are zero, then restores the sign. ``done`` pulses for one cycle with
@@ -41,23 +41,25 @@ class SerialMultiplier(wiring.Component):
         multiplier = Signal(unsigned(width))
         accumulator = Signal(unsigned(2 * width))
         negative = Signal()
-        a_mag = Signal(unsigned(width))
-        b_mag = Signal(unsigned(width))
-        m.d.comb += [
-            a_mag.eq(Mux(self.a < 0, -self.a, self.a)),
-            b_mag.eq(Mux(self.b < 0, -self.b, self.b)),
-            self.done.eq(0),
-        ]
+        a_latched = Signal(signed(width))
+        b_latched = Signal(signed(width))
+        m.d.comb += self.done.eq(0)
         with m.FSM():
             with m.State("IDLE"):
                 with m.If(self.start):
-                    m.d.sync += [
-                        multiplicand.eq(a_mag),
-                        multiplier.eq(b_mag),
-                        accumulator.eq(0),
-                        negative.eq((self.a < 0) ^ (self.b < 0)),
-                    ]
-                    m.next = "RUN"
+                    # Latch raw operands first so the caller's expression is
+                    # never chained with the magnitude logic in one cycle.
+                    m.d.sync += [a_latched.eq(self.a), b_latched.eq(self.b)]
+                    m.next = "MAGNITUDE"
+            with m.State("MAGNITUDE"):
+                m.d.comb += self.busy.eq(1)
+                m.d.sync += [
+                    multiplicand.eq(Mux(a_latched < 0, -a_latched, a_latched)),
+                    multiplier.eq(Mux(b_latched < 0, -b_latched, b_latched)),
+                    accumulator.eq(0),
+                    negative.eq((a_latched < 0) ^ (b_latched < 0)),
+                ]
+                m.next = "RUN"
             with m.State("RUN"):
                 m.d.comb += self.busy.eq(1)
                 with m.If(multiplier == 0):

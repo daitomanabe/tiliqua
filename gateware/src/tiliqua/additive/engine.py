@@ -4,10 +4,10 @@
 
 """Time-multiplexed 1,000-oscillator additive engine for Tiliqua R5.
 
-One 48 kHz sample is computed in roughly 1,020 sync cycles: a two-cycle
-parameter preload, one oscillator per cycle through a five-stage pipeline
-(phase read, phase update and sine address, sine accumulate, group multiply,
-bus accumulate), a short drain, and a serial four-channel output stage
+One 48 kHz sample is computed in roughly 1,030 sync cycles: a two-cycle
+parameter preload, one oscillator per cycle through a six-stage pipeline
+(phase read, phase update, spread/sine address, sine accumulate, group
+multiply, bus accumulate), a short drain, and a serial four-channel output stage
 (saturate, soft limiter, master, ceiling). Per-group parameters live in a
 double-buffered block RAM written by the control engine and swapped only at
 a sample boundary, so every sample sees one consistent parameter set.
@@ -164,15 +164,17 @@ class AdditiveOscillatorBank(wiring.Component):
         }))
         nxt = Signal(PARAM_LAYOUT)
 
+        def times_19(value):
+            # 19 x = 16 x + 2 x + x, adders only (no DSP tile).
+            return (value << 4) + (value << 1) + value
+
         def load_current(source):
             return [
                 cur_base_inc.eq(
-                    (source.midpoint + source.spacing_half * Const(-VOICE_EDGE, signed(6)))[:T.PHASE_BITS]
+                    (source.midpoint - times_19(source.spacing_half))[:T.PHASE_BITS]
                 ),
                 cur_spacing2.eq(source.spacing_half << 1),
-                cur_base_spr.eq(
-                    (source.spread_half * Const(-VOICE_EDGE, signed(6)))[:T.PHASE_BITS]
-                ),
+                cur_base_spr.eq((-times_19(source.spread_half))[:T.PHASE_BITS]),
                 cur_spread2.eq(source.spread_half << 1),
                 cur_gains.left.eq(source.gain_left),
                 cur_gains.right.eq(source.gain_right),
@@ -191,13 +193,20 @@ class AdditiveOscillatorBank(wiring.Component):
             phase_read.en.eq(1),
         ]
 
-        # Stage B registers (phase update)
+        # Stage B1 registers (phase read arrives; add the increment)
         valid_b = Signal()
         osc_b = Signal(range(1024))
         voice_b = Signal(range(T.VOICE_COUNT))
         inc_b = Signal(unsigned(T.PHASE_BITS))
         spr_b = Signal(unsigned(T.PHASE_BITS))
         gains_b = Signal.like(cur_gains)
+        # Stage B2 registers (write back; add the spread offset)
+        valid_b2 = Signal()
+        osc_b2 = Signal(range(1024))
+        voice_b2 = Signal(range(T.VOICE_COUNT))
+        phase_new = Signal(unsigned(T.PHASE_BITS))
+        spr_b2 = Signal(unsigned(T.PHASE_BITS))
+        gains_b2 = Signal.like(cur_gains)
         # Stage C registers (sine accumulate)
         valid_c = Signal()
         voice_c = Signal(range(T.VOICE_COUNT))
@@ -211,28 +220,35 @@ class AdditiveOscillatorBank(wiring.Component):
         valid_e = Signal()
         products = [Signal(signed(36), name=f"product{c}") for c in range(4)]
 
-        phase_new = Signal(unsigned(T.PHASE_BITS))
         effective = Signal(unsigned(T.PHASE_BITS))
         group_first_phase = Signal(unsigned(T.PHASE_BITS))
+        # Display pipeline (relative phase = effective - voice 0's effective).
+        display_valid = Signal()
+        display_osc = Signal(range(1024))
+        display_effective = Signal(unsigned(T.PHASE_BITS))
+        display_first = Signal(unsigned(T.PHASE_BITS))
         relative_phase = Signal(unsigned(T.PHASE_BITS))
         m.d.comb += [
-            phase_new.eq((phase_read.data + inc_b)[:T.PHASE_BITS]),
-            effective.eq((phase_new + spr_b)[:T.PHASE_BITS]),
-            phase_write.addr.eq(osc_b),
+            effective.eq((phase_new + spr_b2)[:T.PHASE_BITS]),
+            phase_write.addr.eq(osc_b2),
             phase_write.data.eq(phase_new),
-            phase_write.en.eq(valid_b),
+            phase_write.en.eq(valid_b2),
             sine_read.addr.eq(effective[T.SINE_SHIFT:]),
             sine_read.en.eq(1),
             self.group_total_probe.eq(group_total),
-            relative_phase.eq(
-                (effective - Mux(voice_b == 0, effective, group_first_phase))[:T.PHASE_BITS]
-            ),
-            self.display_addr.eq(osc_b),
+            relative_phase.eq((display_effective - display_first)[:T.PHASE_BITS]),
+            self.display_addr.eq(display_osc),
             self.display_data.eq(relative_phase[T.PHASE_BITS - 8:]),
-            self.display_en.eq(valid_b),
+            self.display_en.eq(display_valid),
         ]
-        with m.If(valid_b & (voice_b == 0)):
+        with m.If(valid_b2 & (voice_b2 == 0)):
             m.d.sync += group_first_phase.eq(effective)
+        m.d.sync += [
+            display_valid.eq(valid_b2),
+            display_osc.eq(osc_b2),
+            display_effective.eq(effective),
+            display_first.eq(Mux(voice_b2 == 0, effective, group_first_phase)),
+        ]
 
         # Pipeline advance (every cycle).
         m.d.sync += [
@@ -242,9 +258,15 @@ class AdditiveOscillatorBank(wiring.Component):
             inc_b.eq(inc_now),
             spr_b.eq(spr_now),
             gains_b.eq(cur_gains),
-            valid_c.eq(valid_b),
-            voice_c.eq(voice_b),
-            gains_c.eq(gains_b),
+            valid_b2.eq(valid_b),
+            osc_b2.eq(osc_b),
+            voice_b2.eq(voice_b),
+            phase_new.eq((phase_read.data + inc_b)[:T.PHASE_BITS]),
+            spr_b2.eq(spr_b),
+            gains_b2.eq(gains_b),
+            valid_c.eq(valid_b2),
+            voice_c.eq(voice_b2),
+            gains_c.eq(gains_b2),
             valid_d.eq(valid_c & (voice_c == VOICE_EDGE)),
             gains_d.eq(gains_c),
             valid_e.eq(valid_d),
@@ -364,7 +386,7 @@ class AdditiveOscillatorBank(wiring.Component):
                 m.d.comb += running.eq(1)
                 with m.If(osc == T.OSCILLATOR_COUNT - 1):
                     m.next = "DRAIN0"
-            # Drain: B, C, D, E stages for the last voice.
+            # Drain: B1, B2, C, D, E stages for the last voice.
             with m.State("DRAIN0"):
                 m.next = "DRAIN1"
             with m.State("DRAIN1"):
@@ -372,6 +394,8 @@ class AdditiveOscillatorBank(wiring.Component):
             with m.State("DRAIN2"):
                 m.next = "DRAIN3"
             with m.State("DRAIN3"):
+                m.next = "DRAIN4"
+            with m.State("DRAIN4"):
                 m.d.sync += channel.eq(0)
                 m.next = "OUT_MIX"
             with m.State("OUT_MIX"):
