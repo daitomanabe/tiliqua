@@ -47,7 +47,6 @@ GROUP_DISPLAY_LAYOUT = data.StructLayout({
     "low": unsigned(1),
     "air": unsigned(1),
     "pan": signed(8),
-    "reserved": unsigned(6),
 })
 
 EFFECTIVE_LAYOUT = data.StructLayout({

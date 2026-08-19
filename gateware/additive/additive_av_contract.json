@@ -1,0 +1,6 @@
+{
+  "dvi": {"minimum_frames": 5, "minimum_pixels": 2000000, "minimum_rgb_span": 16},
+  "engine": {"maximum_sample_cycles": 1250, "maximum_block_cycles": 160000},
+  "control": {"accepted_frames": 1, "rejected_frames": 0},
+  "audio": {"minimum_nonzero": 1000, "ceiling_asq": 8000, "minimum_peak_asq": 100}
+}

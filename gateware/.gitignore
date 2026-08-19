@@ -11,6 +11,7 @@ dslx-av-metrics.json
 dslx-synth-metrics.json
 snn-av-metrics.json
 snn2-av-metrics.json
+additive-av-metrics.json
 
 # lorenz sim dumps
 *lorenz*.png
