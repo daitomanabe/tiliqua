@@ -4,7 +4,7 @@
 
 """Tiliqua 1,000-sine additive instrument: reference model and shared tables."""
 
-from . import tables
+from . import protocol, tables
 from .reference import (
     AdditiveBlockStatistics,
     AdditiveControlState,
@@ -23,5 +23,6 @@ __all__ = [
     "AdditiveStateError",
     "DEFAULT_CONTROL_STATE",
     "normalize_cv",
+    "protocol",
     "tables",
 ]

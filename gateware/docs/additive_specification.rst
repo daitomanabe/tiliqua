@@ -24,8 +24,15 @@ Phase 1 (specification and deterministic reference) is implemented:
 ``tests/test_additive.py`` freezes the table contents, the default chord, the
 1,000-oscillator structure, bounded outputs, exact mute, stem separation,
 stereo coherence, independent CV effects, block-atomic frame commit, slow
-phase-continuous harmony morph, and determinism. No RTL, build, or hardware
-result exists yet for this profile.
+phase-continuous harmony morph, and determinism.
+
+Phase 2 (framed host control protocol) is implemented:
+``tests/test_additive_control.py`` covers the CRC check value, encode/decode
+round trips, start/version/length/CRC/bounds/stale rejection, resync after
+garbage and truncation, the RTL decoder against the Python model byte for
+byte, rejection counters and reasons, the inter-byte timeout, the link
+watchdog, and the 115200 8N1 receiver decoding real serial bits. No
+oscillator RTL, build, or hardware result exists yet for this profile.
 
 Goals
 =====
@@ -90,8 +97,56 @@ R5. Two guard rails apply:
 
 USB MIDI on ``DEVICE / HOST`` is not used: the repository only contains a USB
 MIDI *host*, so a Mac cannot attach to it without new device-class gateware.
-The frame format itself is defined in the control-protocol phase; the
-transport decision is recorded here because it is part of the I/O contract.
+
+Control frame protocol
+----------------------
+
+``src/tiliqua/additive/protocol.py`` is the normative encoder/decoder and
+``src/tiliqua/additive/control.py`` the RTL decoder (``ControlFrameDecoder``)
+plus the 115200 8N1 receiver (``AdditiveControlLink``). One 45-byte frame
+carries the complete control state:
+
+.. code-block:: text
+
+   offset  size  field
+   0       1     start byte 0xA5
+   1       1     start byte 0x5A
+   2       1     protocol version = 1
+   3       1     sequence number, wraps modulo 256
+   4       1     payload length = 38
+   5       38    payload (below)
+   43      2     CRC-16/CCITT-FALSE over bytes 2..42, big-endian
+
+   payload (little-endian)
+   0  u8   root_midi            1  u8   harmony
+   2  u8   flags: bit0 sub_octave, bit1 output_enabled
+   3  u8   morph_seconds        4  u8   evolution_rate_mhz    5  u8 reserved
+   6  u16  master               8  u16[10] harmonic_levels
+   28 u16  detune_millicents    30 u16  phase_spread
+   32 u16  evolution_amount     34 u16  stereo_width          36 u16 sub_focus
+
+Acceptance rules, applied in this order by both the Python model and the RTL:
+
+1. start bytes, version, and length must match; any other byte while
+   hunting is ignored and ``0xA5`` restarts the start sequence;
+2. the CRC (poly ``0x1021``, init ``0xFFFF``, check value ``0x29B1`` for
+   ``"123456789"``) must match;
+3. every field must satisfy the control-state bounds (reserved bits are
+   ignored);
+4. the sequence must be fresh: the first frame after reset is always fresh,
+   afterwards ``(sequence - last) mod 256`` must lie in ``1..127``, so a
+   duplicate retry or an older frame is rejected as stale;
+5. an inter-byte gap longer than 20 ms inside a frame aborts it, so a
+   truncated frame can never swallow the next one.
+
+A rejected frame leaves the last accepted payload untouched. The RTL keeps
+16-bit accepted/rejected counters, the last reject reason (``start``,
+``version``, ``length``, ``crc``, ``bounds``, ``stale``, ``timeout``), and a
+``link_alive`` flag that drops 2 s after the last accepted frame. After reset
+the decoder presents the specification default state. The FPGA never
+transmits, so the host only needs heartbeat re-sends (with a new sequence
+number) to keep ``link_alive`` high; an unchanged heartbeat payload is
+accepted and merely re-arms the watchdog.
 
 Musical model
 =============
@@ -395,8 +450,7 @@ Reference model and regression gates
 11. master smoothing is monotonic without overshoot;
 12. two instances produce identical output for the same CV stream.
 
-Later phases add, as separate gated commits: the framed control protocol
-with CRC, sequence, and stale-frame rejection; the time-multiplexed RTL
+Later phases add, as separate gated commits: the time-multiplexed RTL
 oscillator core with sample-exact equivalence to this reference and a
 ``<= 1250`` sync-cycle proof; the four outputs and safety tests in RTL; the
 CV layer; the HDMI state view with pixel-level tests; the Mac transport and
