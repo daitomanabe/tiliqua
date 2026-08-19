@@ -169,6 +169,7 @@ class AdditiveReference:
         self.sample_index = 0
         self.block_index = 0
         self.initialized = False
+        self._block_prepared_at = -1
 
         self.phases = np.array(T.INITIAL_PHASE_TABLE, dtype=np.uint32)
         self._voice_offsets = np.array(
@@ -473,10 +474,19 @@ class AdditiveReference:
     # ------------------------------------------------------------------
     # Sample-rate oscillator engine
 
+    def prepare_block(self) -> bool:
+        """Run the control block due at this sample index, once; True if it ran."""
+        if self.sample_index % T.CONTROL_BLOCK_SAMPLES != 0:
+            return False
+        if self._block_prepared_at == self.sample_index:
+            return False
+        self.step_block()
+        self._block_prepared_at = self.sample_index
+        return True
+
     def step_sample(self, cv_asq: Sequence[int] = (0, 0, 0, 0)) -> tuple[int, int, int, int]:
         """Advance all 1,000 oscillators by one sample and return OUT 0-3."""
-        if self.sample_index % T.CONTROL_BLOCK_SAMPLES == 0:
-            self.step_block()
+        self.prepare_block()
         for index in range(4):
             self.cv_accumulators[index] += int(cv_asq[index])
 

@@ -31,8 +31,22 @@ Phase 2 (framed host control protocol) is implemented:
 round trips, start/version/length/CRC/bounds/stale rejection, resync after
 garbage and truncation, the RTL decoder against the Python model byte for
 byte, rejection counters and reasons, the inter-byte timeout, the link
-watchdog, and the 115200 8N1 receiver decoding real serial bits. No
-oscillator RTL, build, or hardware result exists yet for this profile.
+watchdog, and the 115200 8N1 receiver decoding real serial bits.
+
+Phase 3 (time-multiplexed oscillator core) is implemented:
+``src/tiliqua/additive/engine.py`` (``AdditiveOscillatorBank``) holds the
+1,000 phase accumulators in block RAM, updates one oscillator per sync cycle
+through a five-stage pipeline with running increment and spread sums, forms
+exact 20-voice group sums, multiplies each finished group by its four bus
+gains in DSP tiles, accumulates four 41-bit buses, and runs the serial
+saturate / soft-limiter / master / ceiling output stage. Parameters live in a
+double-buffered block RAM swapped only at a sample start.
+``tests/test_additive_engine.py`` proves sample-for-sample equality with the
+reference over several control blocks for the default chord, a worst-case
+all-harmonics zero-spread state under output backpressure, a muted state, and
+a transposed/tilted GLASS state driven by changing CV, with every sample
+finishing in exactly 1,027 sync cycles (limit 1,250) and no overrun fault.
+No build or hardware result exists yet for this profile.
 
 Goals
 =====
@@ -450,10 +464,8 @@ Reference model and regression gates
 11. master smoothing is monotonic without overshoot;
 12. two instances produce identical output for the same CV stream.
 
-Later phases add, as separate gated commits: the time-multiplexed RTL
-oscillator core with sample-exact equivalence to this reference and a
-``<= 1250`` sync-cycle proof; the four outputs and safety tests in RTL; the
-CV layer; the HDMI state view with pixel-level tests; the Mac transport and
+Later phases add, as separate gated commits: the four outputs and safety
+tests in RTL; the CV layer; the HDMI state view with pixel-level tests; the Mac transport and
 ES-9 return bridge; full simulation and R5 QoR; SRAM-only hardware
 validation; and demo packaging.
 
