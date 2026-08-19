@@ -466,6 +466,17 @@ The normal SNN2 output contract above remains the default when ``--performance``
 is absent. Performance mode is therefore an explicit build profile rather than
 a silent change to existing SNN2 bitstreams.
 
+Successor: hardware additive instrument
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The mono analogue link and the illustrative particle animation above are an
+interim demo. The optimized four-input/four-output instrument -- a framed
+digital control link from the Mac UI, four analogue macro CVs on ``IN 0-3``,
+a real time-multiplexed 1,000-oscillator engine on the FPGA, additive audio on
+all of ``OUT 0-3``, and an HDMI view fed by committed bank state -- is
+specified separately in :doc:`additive_specification`. It is a new
+``ADDITIVE`` profile and does not change the SNN2 contracts above.
+
 Training and manifest format
 ============================
 
