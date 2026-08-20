@@ -307,6 +307,9 @@ def top_level_cli(
             "nextpnr_opts": nextpnr_opts,
             "ecppack_opts": f"--freq 38.8 --compress --bootaddr {args.bootaddr}"
         }
+        extra_synth_opts = os.environ.get("TILIQUA_SYNTH_OPTS")
+        if extra_synth_opts:
+            build_flags["synth_opts"] = extra_synth_opts
 
         # workaround for https://github.com/YosysHQ/yosys/issues/4451
         build_flags |= {
