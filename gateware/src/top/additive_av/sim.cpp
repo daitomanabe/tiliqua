@@ -14,6 +14,8 @@
 
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
+#include <cstring>
 #include <limits>
 #include <vector>
 
@@ -113,7 +115,14 @@ int main(int argc, char** argv) {
     context.commandArgs(argc, argv);
     Vtiliqua_soc top{&context};
 
-    constexpr uint64_t simulation_time_ps = 120'000'000'000ULL;  // 120 ms
+    // Default 120 ms; ADDITIVE_SIM_MS overrides (used for offline audio dumps).
+    uint64_t simulation_ms = 120;
+    if (const char* ms_env = std::getenv("ADDITIVE_SIM_MS")) {
+        simulation_ms = std::strtoull(ms_env, nullptr, 10);
+        if (simulation_ms < 10) simulation_ms = 10;
+    }
+    const uint64_t simulation_time_ps = simulation_ms * 1'000'000'000ULL;
+    const bool inject_frame = std::getenv("ADDITIVE_SIM_NO_FRAME") == nullptr;
     constexpr uint64_t ns_per_second = 1'000'000'000ULL;
     const uint64_t ns_per_sync_cycle = ns_per_second / SYNC_CLK_HZ;
     const uint64_t ns_per_dvi_cycle = ns_per_second / DVI_CLK_HZ;
@@ -172,7 +181,7 @@ int main(int argc, char** argv) {
         if (sync_rising) {
             if (top.control_strobe) {
                 top.control_strobe = 0;
-            } else if (frame_index < frame.size() && timestamp_ns >= next_byte_ns) {
+            } else if (inject_frame && frame_index < frame.size() && timestamp_ns >= next_byte_ns) {
                 top.control_byte = frame[frame_index++];
                 top.control_strobe = 1;
                 next_byte_ns = timestamp_ns + byte_gap_ns;
@@ -192,6 +201,21 @@ int main(int argc, char** argv) {
     for (int channel = 0; channel != 4; ++channel) {
         audio[channel] = measure_audio(i2s_driver.get_captured_samples(channel));
     }
+    if (const char* dump_path = std::getenv("ADDITIVE_SIM_DUMP")) {
+        FILE* dump = std::fopen(dump_path, "w");
+        if (dump != nullptr) {
+            const size_t frames_captured = i2s_driver.get_captured_samples(0).size();
+            for (size_t index = 0; index != frames_captured; ++index) {
+                for (int channel = 0; channel != 4; ++channel) {
+                    const auto& samples = i2s_driver.get_captured_samples(channel);
+                    const float value = index < samples.size() ? samples[index] : 0.0f;
+                    std::fwrite(&value, sizeof(float), 1, dump);
+                }
+            }
+            std::fclose(dump);
+            std::printf("audio dump: %s (%zu frames)\n", dump_path, frames_captured);
+        }
+    }
 
     bool passed = true;
     passed &= top.sample_index_debug > 4000;
@@ -203,16 +227,16 @@ int main(int argc, char** argv) {
     passed &= dvi_driver.get_channel_max(0) - dvi_driver.get_channel_min(0) >= 16;
     passed &= dvi_driver.get_channel_max(1) - dvi_driver.get_channel_min(1) >= 16;
     passed &= dvi_driver.get_channel_max(2) - dvi_driver.get_channel_min(2) >= 16;
-    passed &= top.accepted_count_debug == 1;
+    passed &= top.accepted_count_debug == (inject_frame ? 1 : 0);
     passed &= top.rejected_count_debug == 0;
-    passed &= top.link_alive_debug != 0;
+    passed &= !inject_frame || top.link_alive_debug != 0;
     // IN 0 near +1 V smooths to roughly half scale (unipolar 2 V range);
     // IN 1 near +0.5 V to roughly +0.5 (bipolar 1 V range).
     passed &= top.cv0_smoothed_debug > 8000 && top.cv0_smoothed_debug < 26000;
     passed &= static_cast<int16_t>(top.cv1_smoothed_debug) > 4000
            && static_cast<int16_t>(top.cv1_smoothed_debug) < 26000;
     // The frame raises the master from 0.42 to 0.60 (plus the IN 0 offset).
-    passed &= master_after_frame > master_before_frame;
+    passed &= !inject_frame || master_after_frame > master_before_frame;
     passed &= top.master_asq_debug <= 8000;
     for (int channel = 0; channel != 4; ++channel) {
         passed &= audio[channel].samples > 3000;
